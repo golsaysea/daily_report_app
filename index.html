@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -10,7 +10,7 @@
   <div class="lock-screen" id="lockScreen">
     <div class="lock-box">
       <h2>小组报数日记</h2>
-      <p>请输入云端访问密码</p>
+      <p>请输入应用密码</p>
       <input id="appPasswordInput" type="password" placeholder="默认 999">
       <button class="primary" id="unlockBtn">进入</button>
       <small id="lockHint"></small>
@@ -20,7 +20,7 @@
     <header class="topbar">
       <div class="brand">
         <h1>小组报数日记</h1>
-        <small id="syncLabel">云端未解锁</small>
+        <small id="syncLabel">本地浏览器数据</small>
       </div>
       <nav class="tabs" aria-label="视图">
         <button class="tab active" data-view="entry">今日</button>
@@ -29,11 +29,11 @@
       </nav>
       <div class="actions">
         <label class="switch"><input type="checkbox" id="compactToggle"> 小巧</label>
-        <button id="openFileBtn" title="从云端重新读取最新数据">云端刷新</button>
-        <button id="sheetBackupBtn" title="生成可用 Google 表格打开的表格文件">表格导出</button>
-        <button class="hidden" id="backupBtn" title="网页端不使用本地备份">备份</button>
-        <button class="hidden" id="exportBtn" title="导出当前数据">导出</button>
-        <button class="hidden" id="importBtn" title="导入 JSON">导入</button>
+        <button id="openFileBtn" title="选择 Google Drive 本地同步文件夹">云端文件夹</button>
+        <button id="backupBtn" title="查看本地备份">备份</button>
+        <button id="sheetBackupBtn" title="生成可用 Google 表格打开的 CSV 备份">表格备份</button>
+        <button id="exportBtn" title="导出当前数据">导出</button>
+        <button id="importBtn" title="导入 JSON">导入</button>
         <button class="primary" id="saveBtn">提交</button>
       </div>
     </header>
@@ -55,11 +55,6 @@
             <div class="metric"><span>原始</span><strong id="rawTotal">0</strong></div>
             <div class="metric"><span>换算</span><strong id="weightedTotal">0</strong></div>
             <div class="metric" id="auditCard"><span>审核</span><strong id="auditText">待审核</strong></div>
-          </section>
-
-          <section class="panel checkin-panel">
-            <div class="panel-head"><h2>早中晚打卡</h2><span class="hint">选项由管理员维护</span></div>
-            <div class="checkin-grid" id="checkinInputs"></div>
           </section>
 
           <section class="grid-2">
@@ -117,10 +112,6 @@
               <div><span>总定额</span><strong id="teamQuota">0</strong></div>
               <div><span>总差额</span><strong id="teamDiff">0</strong></div>
             </div>
-          </section>
-          <section class="panel">
-            <div class="panel-head"><h2>各组打卡情况</h2><span class="hint">按早中晚汇总统计</span></div>
-            <div class="checkin-summary-grid" id="groupCheckinSummary"></div>
           </section>
           <section class="panel">
             <div class="panel-head"><h2>成员达标表</h2><span class="hint" id="overviewHint"></span></div>
@@ -242,34 +233,16 @@
             <div class="item-check-grid" id="groupItemConfigBox"></div>
           </section>
           <section class="panel">
-            <div class="panel-head"><h2>打卡选项</h2><span class="hint">默认：准时上线、迟到</span></div>
-            <div class="add-member admin-add">
-              <input id="checkinOptionInput" placeholder="新增打卡选项">
-              <button class="icon" id="addCheckinOptionBtn" title="添加打卡选项">+</button>
-            </div>
-            <div class="option-list" id="checkinOptionBox"></div>
-          </section>
-          <section class="panel">
             <div class="panel-head"><h2>权限</h2><span class="hint">默认密码 999</span></div>
             <div class="form-grid">
               <label for="autoAuditToggle">自动审核</label>
               <label class="switch-light"><input id="autoAuditToggle" type="checkbox"> 提交后自动判断达标</label>
               <label for="adminPasswordInput">新密码</label>
               <input id="adminPasswordInput" type="password" placeholder="留空则不修改">
-              <label for="sheetBackupToggle">表格导出</label>
-              <label class="switch-light"><input id="sheetBackupToggle" type="checkbox"> 提交后允许生成 3 个月表格</label>
-              <label class="hidden" for="backupCleanupToggle">本地清理</label>
-              <label class="switch-light hidden"><input id="backupCleanupToggle" type="checkbox"> 不使用</label>
-              <label class="hidden" for="autoUpdateToggle">网页更新</label>
-              <label class="switch-light hidden"><input id="autoUpdateToggle" type="checkbox"> 不使用</label>
-            </div>
-            <div class="update-row hidden">
-              <div>
-                <strong>网页更新状态</strong>
-                <span id="updateStatusText">通过服务器部署更新</span>
-              </div>
-              <button id="checkUpdateBtn">检查更新</button>
-              <button class="primary" id="installUpdateBtn" disabled>重启更新</button>
+              <label for="sheetBackupToggle">表格备份</label>
+              <label class="switch-light"><input id="sheetBackupToggle" type="checkbox"> 提交后自动更新 3 个月表格</label>
+              <label for="backupCleanupToggle">本地清理</label>
+              <label class="switch-light"><input id="backupCleanupToggle" type="checkbox"> 自动清理小备份，保留周/月重要备份</label>
             </div>
             <div class="message-grid">
               <label>达标随机文案<textarea id="passMessagesInput"></textarea></label>
@@ -277,7 +250,7 @@
             </div>
           </section>
           <section class="panel">
-            <div class="panel-head"><h2>云端存储</h2><span class="hint" id="adminSaveStatus">浏览器不保存本地缓存</span></div>
+            <div class="panel-head"><h2>同步与备份</h2><span class="hint" id="adminSaveStatus">本地自动保留 90 天</span></div>
             <div class="backup-list" id="backupList"></div>
           </section>
         </section>

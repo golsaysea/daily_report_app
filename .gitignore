@@ -6,6 +6,14 @@ local-release-windows/
 __pycache__/
 *.pyc
 
+# Local desktop/legacy files are not needed for the Vercel web deployment.
+app.ts
+daily_report_app.py
+electron-main.cjs
+electron-preload.cjs
+run_daily_report.bat
+run_software_app.bat
+
 .env
 .env.*
 *.pem
@@ -23,5 +31,6 @@ backups/
 *.log
 *.tmp
 
+.vercel/
 .DS_Store
 Thumbs.db

@@ -1,4 +1,4 @@
-const defaultData = {
+﻿const defaultData = {
   version: 2,
   updated_at: "",
   quota: 3,
@@ -10,11 +10,9 @@ const defaultData = {
   memberItems: {},
   memberQuotas: {},
   dailyQuotas: {},
-  checkinOptions: ["准时上线", "迟到"],
   adminPassword: "999",
   sheetBackupEnabled: true,
   backupCleanupEnabled: false,
-  autoUpdateEnabled: true,
   autoAudit: true,
   reviewMessages: {
     pass: ["恭喜达标", "今天很稳", "继续保持", "漂亮完成", "节奏很好", "进步明显", "状态在线", "效率不错", "超额很棒", "明天继续"],
@@ -26,9 +24,9 @@ const clone = (obj) => JSON.parse(JSON.stringify(obj));
 let data = loadLocal();
 let currentMember = data.members[0] || "成员A";
 let currentDate = dateKeyFromDate(new Date());
-let cloudPassword = "";
-let lastCloudSnapshot = null;
-let pollTimer = 0;
+let fileHandle = null;
+let cloudDirHandle = null;
+let lastFileModified = 0;
 let pendingDialogField = "";
 let activeView = "entry";
 let saveTimer = 0;
@@ -38,12 +36,7 @@ let appUnlocked = false;
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Number(n || 0).toLocaleString("zh-CN", { maximumFractionDigits: 3 });
 const recordKey = () => `${currentDate}|${currentMember}`;
-const cloudApiBase = String(window.DAILY_REPORT_API_URL || "").replace(/\/$/, "");
-const checkinPeriods = [
-  { key: "morning", label: "早" },
-  { key: "noon", label: "中" },
-  { key: "evening", label: "晚" }
-];
+const desktopApp = window.desktopApp || null;
 function todayLocalKey() {
   const now = new Date();
   return dateKeyFromDate(now);
@@ -64,9 +57,6 @@ function normalize(source) {
   });
   const memberQuotas = { ...(loaded.memberQuotas || {}) };
   const dailyQuotas = loaded.dailyQuotas && typeof loaded.dailyQuotas === "object" ? clone(loaded.dailyQuotas) : {};
-  const checkinOptions = Array.isArray(loaded.checkinOptions) && loaded.checkinOptions.length
-    ? Array.from(new Set(loaded.checkinOptions.map((item) => String(item).trim()).filter(Boolean)))
-    : clone(defaultData.checkinOptions);
   return {
     ...clone(defaultData),
     ...loaded,
@@ -80,11 +70,9 @@ function normalize(source) {
     memberItems,
     memberQuotas,
     dailyQuotas,
-    checkinOptions,
     adminPassword: String(loaded.adminPassword || defaultData.adminPassword),
     sheetBackupEnabled: loaded.sheetBackupEnabled !== false,
     backupCleanupEnabled: loaded.backupCleanupEnabled === true,
-    autoUpdateEnabled: loaded.autoUpdateEnabled !== false,
     autoAudit: loaded.autoAudit !== false,
     reviewMessages: {
       pass: Array.isArray(loaded.reviewMessages?.pass) ? loaded.reviewMessages.pass : clone(defaultData.reviewMessages.pass),
@@ -94,15 +82,50 @@ function normalize(source) {
   };
 }
 function loadLocal() {
-  return normalize(defaultData);
+  try {
+    const saved = JSON.parse(localStorage.getItem("dailyReportData") || "null");
+    return normalize(saved);
+  } catch {
+    return clone(defaultData);
+  }
 }
 function readBackups() {
-  return [];
+  try {
+    const items = JSON.parse(localStorage.getItem("dailyReportBackups") || "[]");
+    return Array.isArray(items) ? items : [];
+  } catch {
+    return [];
+  }
 }
-function pruneBackups() {}
-function createBackup(_label = "自动备份") {}
+function writeBackups(items) {
+  localStorage.setItem("dailyReportBackups", JSON.stringify(items));
+}
+function pruneBackups() {
+  if (!data?.backupCleanupEnabled) return;
+  const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+  writeBackups(readBackups().filter((item) => {
+    if (/周备份|月备份|配置|恢复/.test(item.label || "")) return true;
+    return new Date(item.created_at).getTime() >= cutoff;
+  }).slice(0, 120));
+}
+function createBackup(label = "自动备份") {
+  pruneBackups();
+  const backups = readBackups();
+  const today = new Date().toISOString().slice(0, 10);
+  const last = backups[0];
+  if (last && last.label === label && last.created_at.slice(0, 10) === today) return;
+  backups.unshift({
+    id: `${Date.now()}`,
+    created_at: new Date().toISOString(),
+    label,
+    data: clone(data)
+  });
+  writeBackups(backups.slice(0, 80));
+}
 function persistLocal() {
   data.updated_at = new Date().toISOString();
+  localStorage.setItem("dailyReportData", JSON.stringify(data));
+  pruneBackups();
 }
 function newerRecord(a, b) {
   if (!a) return b;
@@ -143,12 +166,10 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.memberItems = clone(local.memberItems || {});
     merged.memberQuotas = clone(local.memberQuotas || {});
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
-    merged.checkinOptions = clone(local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(local.quota || 0);
     merged.adminPassword = String(local.adminPassword || "999");
     merged.sheetBackupEnabled = local.sheetBackupEnabled !== false;
     merged.backupCleanupEnabled = local.backupCleanupEnabled === true;
-    merged.autoUpdateEnabled = local.autoUpdateEnabled !== false;
     merged.autoAudit = local.autoAudit !== false;
     merged.reviewMessages = clone(local.reviewMessages || defaultData.reviewMessages);
   } else {
@@ -160,63 +181,122 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.memberItems = clone(remote.memberItems || local.memberItems || {});
     merged.memberQuotas = clone(remote.memberQuotas || local.memberQuotas || {});
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
-    merged.checkinOptions = clone(remote.checkinOptions || local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(remote.quota ?? local.quota ?? 0);
     merged.adminPassword = String(remote.adminPassword || local.adminPassword || "999");
     merged.sheetBackupEnabled = remote.sheetBackupEnabled !== false;
     merged.backupCleanupEnabled = remote.backupCleanupEnabled === true;
-    merged.autoUpdateEnabled = remote.autoUpdateEnabled !== false;
     merged.autoAudit = remote.autoAudit !== false;
     merged.reviewMessages = clone(remote.reviewMessages || local.reviewMessages || defaultData.reviewMessages);
   }
   return normalize(merged);
 }
 async function readRemoteData() {
-  if (!cloudPassword) return lastCloudSnapshot;
-  const result = await cloudRequest("/api/data");
-  return result.data || result;
+  if (desktopApp?.isDesktop) {
+    const result = await desktopApp.getCloudData();
+    if (result?.text?.trim()) return JSON.parse(result.text);
+    return null;
+  }
+  if (fileHandle) {
+    const file = await fileHandle.getFile();
+    const text = await file.text();
+    return text.trim() ? JSON.parse(text) : null;
+  }
+  return null;
 }
 async function persistEverywhere(mode = "records") {
-  if (!appUnlocked) return;
   persistLocal();
   const remoteData = await readRemoteData().catch(() => null);
   data = mergeCloudData(remoteData, data, mode);
   persistLocal();
-  const result = await cloudRequest("/api/data", {
-    method: "PUT",
-    body: JSON.stringify({ data })
-  });
-  data = normalize(result.data || data);
-  lastCloudSnapshot = clone(data);
-  $("syncLabel").textContent = `云端已同步 · ${new Date().toLocaleTimeString("zh-CN")}`;
-}
-async function cloudRequest(path, options = {}) {
-  const headers = {
-    Accept: "application/json",
-    ...(options.headers || {})
-  };
-  if (options.body) headers["Content-Type"] = "application/json";
-  if (cloudPassword) headers["X-App-Password"] = cloudPassword;
-  const response = await fetch(`${cloudApiBase}${path}`, {
-    cache: "no-store",
-    ...options,
-    headers
-  });
-  let payload = null;
-  try {
-    payload = await response.json();
-  } catch {}
-  if (!response.ok) {
-    throw new Error(payload?.error || `云端请求失败：${response.status}`);
+  if (desktopApp?.isDesktop) {
+    const result = await desktopApp.writeCloudData(data);
+    if (result?.path) {
+      lastFileModified = result.mtime || lastFileModified;
+      $("syncLabel").textContent = `软件同步：${result.path}`;
+    }
+    return;
   }
-  return payload || {};
+  if (!fileHandle) return;
+  try {
+    const writable = await fileHandle.createWritable();
+    await writable.write(JSON.stringify(data, null, 2));
+    await writable.close();
+    const file = await fileHandle.getFile();
+    lastFileModified = file.lastModified;
+    $("syncLabel").textContent = `共享文件：${file.name}`;
+  } catch {
+    $("syncLabel").textContent = "共享文件写入失败，已保存到本地浏览器";
+  }
 }
-async function unlockCloud(password) {
-  const result = await cloudRequest("/api/unlock", {
-    method: "POST",
-    body: JSON.stringify({ password })
+function openCloudDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open("dailyReportCloud", 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("handles");
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
   });
-  return normalize(result.data || result);
+}
+async function saveCloudDirectory(dir) {
+  try {
+    const db = await openCloudDb();
+    const tx = db.transaction("handles", "readwrite");
+    tx.objectStore("handles").put(dir, "directory");
+  } catch {}
+}
+async function loadCloudDirectory() {
+  try {
+    const db = await openCloudDb();
+    return await new Promise((resolve) => {
+      const tx = db.transaction("handles", "readonly");
+      const request = tx.objectStore("handles").get("directory");
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+async function hasCloudPermission(dir) {
+  if (!dir) return false;
+  const options = { mode: "readwrite" };
+  if ((await dir.queryPermission?.(options)) === "granted") return true;
+  return (await dir.requestPermission?.(options)) === "granted";
+}
+async function useCloudDirectory(dir, shouldSave = true) {
+  if (!(await hasCloudPermission(dir))) return false;
+  cloudDirHandle = dir;
+  const handle = await dir.getFileHandle("report_data.json", { create: true });
+  fileHandle = handle;
+  const file = await handle.getFile();
+  lastFileModified = file.lastModified;
+  const text = await file.text();
+  createBackup("连接云端文件夹前备份");
+  if (text.trim()) data = normalize(JSON.parse(text));
+  persistLocal();
+  $("syncLabel").textContent = `云端文件夹：${dir.name}\\report_data.json`;
+  if (!data.members.includes(currentMember)) currentMember = data.members[0];
+  loadForm();
+  render();
+  if (!text.trim()) await persistEverywhere();
+  if (shouldSave) await saveCloudDirectory(dir);
+  return true;
+}
+async function restoreCloudDirectory() {
+  if (desktopApp?.isDesktop) {
+    const result = await desktopApp.getCloudData();
+    if (!result || result.error) return;
+    if (result.text?.trim()) data = normalize(JSON.parse(result.text));
+    lastFileModified = result.mtime || 0;
+    $("syncLabel").textContent = `软件同步：${result.path}`;
+    if (!data.members.includes(currentMember)) currentMember = data.members[0];
+    persistLocal();
+    loadForm();
+    render();
+    return;
+  }
+  if (!("showDirectoryPicker" in window) || !("indexedDB" in window)) return;
+  const dir = await loadCloudDirectory();
+  if (dir) await useCloudDirectory(dir, false);
 }
 function scheduleSave(mode = "records") {
   window.clearTimeout(saveTimer);
@@ -239,29 +319,6 @@ function memberQuota(member, day = currentDate) {
   if (dailyDefault !== null) return dailyDefault;
   const own = quotaValue(data.memberQuotas?.[member]);
   return own === null ? Number(data.quota || 0) : own;
-}
-function checkinOptions() {
-  if (!Array.isArray(data.checkinOptions) || !data.checkinOptions.length) {
-    data.checkinOptions = clone(defaultData.checkinOptions);
-  }
-  data.checkinOptions = Array.from(new Set(data.checkinOptions.map((item) => String(item).trim()).filter(Boolean)));
-  if (!data.checkinOptions.length) data.checkinOptions = clone(defaultData.checkinOptions);
-  return data.checkinOptions;
-}
-function defaultCheckins() {
-  return Object.fromEntries(checkinPeriods.map((period) => [period.key, ""]));
-}
-function recordCheckins(rec) {
-  if (!rec.checkins || typeof rec.checkins !== "object") rec.checkins = defaultCheckins();
-  checkinPeriods.forEach((period) => {
-    rec.checkins[period.key] = String(rec.checkins[period.key] || "");
-  });
-  return rec.checkins;
-}
-function checkinSummaryText(checkins) {
-  return checkinPeriods
-    .map((period) => `${period.label}:${checkins?.[period.key] || "未打卡"}`)
-    .join(" · ");
 }
 function setDailyDefaultQuota(day, value) {
   const entry = dailyQuotaEntry(day);
@@ -374,11 +431,9 @@ function currentRecord() {
       harvest: "",
       diary: "",
       items: {},
-      checkins: defaultCheckins(),
       updated_at: ""
     };
   }
-  recordCheckins(data.records[recordKey()]);
   return data.records[recordKey()];
 }
 function parseEntry(text) {
@@ -452,35 +507,6 @@ function renderEntryInputs(seedItems = readEntryInputs()) {
   $("selectedItemsBtn").classList.toggle("active", !showAllEntryItems);
   $("allItemsBtn").classList.toggle("active", showAllEntryItems);
 }
-function readCheckinInputs() {
-  const rec = currentRecord();
-  const current = recordCheckins(rec);
-  $("checkinInputs")?.querySelectorAll("select[data-checkin-period]").forEach((select) => {
-    current[select.dataset.checkinPeriod] = select.value;
-  });
-  return current;
-}
-function renderCheckinInputs() {
-  const rec = currentRecord();
-  const current = recordCheckins(rec);
-  const options = checkinOptions();
-  $("checkinInputs").innerHTML = checkinPeriods.map((period) => `
-    <label class="checkin-field">
-      <span>${period.label}打卡</span>
-      <select data-checkin-period="${period.key}">
-        <option value="">未打卡</option>
-        ${options.map((option) => `<option value="${escapeAttr(option)}" ${current[period.key] === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
-      </select>
-    </label>
-  `).join("");
-  $("checkinInputs").querySelectorAll("select[data-checkin-period]").forEach((select) => {
-    select.onchange = () => {
-      saveFormSilently();
-      renderOverview();
-      scheduleSave("records");
-    };
-  });
-}
 function preview() {
   const items = readEntryInputs();
   const parsed = { items, ...entryTotals(items) };
@@ -508,7 +534,6 @@ function loadForm() {
   }
   $("entryText").value = rec.text || "";
   renderEntryInputs(Object.keys(rec.items || {}).length ? rec.items : parseEntry(rec.text || "").items);
-  renderCheckinInputs();
   $("statusSelect").value = ["自动判断", "达标", "不达标", "待审核"].includes(rec.status) ? rec.status : "自动判断";
   $("reasonText").value = rec.reason || "";
   $("harvestText").value = rec.harvest || "";
@@ -519,7 +544,6 @@ function saveFormSilently() {
   data.quota = Number($("quotaInput").value || 0);
   if ($("dailyQuotaInput")) setDailyMemberQuota(currentMember, currentDate, $("dailyQuotaInput").value);
   const items = readEntryInputs();
-  const checkins = readCheckinInputs();
   const parsed = { items, ...entryTotals(items) };
   $("entryText").value = itemsToText(items);
   const quota = memberQuota(currentMember);
@@ -541,7 +565,6 @@ function saveFormSilently() {
     harvest: $("harvestText").value.trim(),
     diary: $("diaryText").value.trim(),
     items: parsed.items,
-    checkins,
     updated_at: new Date().toISOString()
   });
   persistLocal();
@@ -740,61 +763,11 @@ function renderMemberItemConfig() {
     };
   });
 }
-function renderCheckinOptionsConfig() {
-  $("checkinOptionBox").innerHTML = checkinOptions().map((name) => `
-    <div class="option-row">
-      <input value="${escapeAttr(name)}" data-checkin-option="${escapeAttr(name)}" aria-label="打卡选项">
-      <button class="icon" data-remove-checkin-option="${escapeAttr(name)}" title="删除选项">×</button>
-    </div>
-  `).join("");
-  $("checkinOptionBox").querySelectorAll("input[data-checkin-option]").forEach((input) => {
-    input.onchange = () => renameCheckinOption(input.dataset.checkinOption, input.value.trim());
-  });
-  $("checkinOptionBox").querySelectorAll("button[data-remove-checkin-option]").forEach((button) => {
-    button.onclick = () => removeCheckinOption(button.dataset.removeCheckinOption);
-  });
-}
 function addGroup(name) {
   if (!name || data.groups.includes(name)) return;
   data.groups.push(name);
   data.groupItems[name] = configuredItems();
   $("groupNameInput").value = "";
-  render();
-  scheduleSave("admin");
-}
-function addCheckinOption(name) {
-  const value = String(name || "").trim();
-  if (!value || checkinOptions().includes(value)) return;
-  data.checkinOptions.push(value);
-  $("checkinOptionInput").value = "";
-  renderCheckinOptionsConfig();
-  renderCheckinInputs();
-  renderOverview();
-  scheduleSave("admin");
-}
-function renameCheckinOption(oldName, newName) {
-  const next = String(newName || "").trim();
-  if (!next || (next !== oldName && checkinOptions().includes(next))) return renderCheckinOptionsConfig();
-  data.checkinOptions = checkinOptions().map((item) => item === oldName ? next : item);
-  Object.values(data.records || {}).forEach((rec) => {
-    const checkins = recordCheckins(rec);
-    checkinPeriods.forEach((period) => {
-      if (checkins[period.key] === oldName) checkins[period.key] = next;
-    });
-  });
-  render();
-  scheduleSave("admin");
-}
-function removeCheckinOption(name) {
-  if (checkinOptions().length <= 1) return alert("至少保留一个打卡选项。");
-  if (!confirm(`确定删除打卡选项“${name}”？已使用该选项的记录会改为未打卡。`)) return;
-  data.checkinOptions = checkinOptions().filter((item) => item !== name);
-  Object.values(data.records || {}).forEach((rec) => {
-    const checkins = recordCheckins(rec);
-    checkinPeriods.forEach((period) => {
-      if (checkins[period.key] === name) checkins[period.key] = "";
-    });
-  });
   render();
   scheduleSave("admin");
 }
@@ -895,8 +868,7 @@ function renderOverview() {
     const passed = status === "达标" || weighted >= quota;
     const rate = quota > 0 ? Math.min(100, Math.round((weighted / quota) * 100)) : 100;
     const items = rec?.items || {};
-    const checkins = rec ? recordCheckins(rec) : defaultCheckins();
-    return { member, rec, quota, weighted, passed, rate, items, checkins };
+    return { member, rec, quota, weighted, passed, rate, items };
   });
   const pass = rows.filter((row) => row.passed).length;
   const fail = rows.length - pass;
@@ -924,16 +896,13 @@ function renderOverview() {
       <div class="progress" title="${row.rate}%"><span style="--w:${row.rate}%"></span></div>
       <div class="hint">换算 ${fmt(row.weighted)} / 定额 ${fmt(row.quota)}</div>
       <div class="hint">差额 ${row.weighted - row.quota >= 0 ? "+" : ""}${fmt(row.weighted - row.quota)}</div>
-      <div class="hint">${escapeHtml(checkinSummaryText(row.checkins))}</div>
       <div class="hint">${escapeHtml(row.rec?.reason || row.rec?.harvest || "暂无备注")}</div>
     </article>
   `).join("");
-  renderGroupCheckinSummary(rows);
   $("detailHint").textContent = itemNames.map((name) => `${name} ${fmt(itemTotals[name])}`).join(" · ");
   $("detailHead").innerHTML = `
     <tr>
       <th>成员</th>
-      ${checkinPeriods.map((period) => `<th>${period.label}打卡</th>`).join("")}
       ${itemNames.map((name) => `<th>${escapeHtml(name)}</th>`).join("")}
       <th>原始</th>
       <th>换算</th>
@@ -946,7 +915,6 @@ function renderOverview() {
   $("detailBody").innerHTML = rows.map((row) => `
     <tr>
       <td>${escapeHtml(row.member)}</td>
-      ${checkinPeriods.map((period) => `<td>${escapeHtml(row.checkins?.[period.key] || "未打卡")}</td>`).join("")}
       ${itemNames.map((name) => `<td>${fmt(row.items[name] || 0)}</td>`).join("")}
       <td>${fmt(row.rec?.raw_total || 0)}</td>
       <td>${fmt(row.weighted)}</td>
@@ -958,7 +926,6 @@ function renderOverview() {
   `).join("") + `
     <tr>
       <th>合计</th>
-      ${checkinPeriods.map(() => `<th></th>`).join("")}
       ${itemNames.map((name) => `<th>${fmt(itemTotals[name])}</th>`).join("")}
       <th>${fmt(rows.reduce((sum, row) => sum + Number(row.rec?.raw_total || 0), 0))}</th>
       <th>${fmt(totalWeighted)}</th>
@@ -969,33 +936,6 @@ function renderOverview() {
     </tr>
   `;
   renderAnalytics();
-}
-function renderGroupCheckinSummary(rows) {
-  const rowMap = new Map(rows.map((row) => [row.member, row]));
-  const options = checkinOptions();
-  $("groupCheckinSummary").innerHTML = data.groups.map((group) => {
-    const members = groupMembers(group);
-    const memberRows = members.map((member) => rowMap.get(member)).filter(Boolean);
-    const allDone = memberRows.filter((row) => checkinPeriods.every((period) => row.checkins?.[period.key])).length;
-    const anyLate = memberRows.filter((row) => checkinPeriods.some((period) => row.checkins?.[period.key] === "迟到")).length;
-    const periodRows = checkinPeriods.map((period) => {
-      const counts = options.map((option) => {
-        const count = memberRows.filter((row) => row.checkins?.[period.key] === option).length;
-        return `${option} ${count}`;
-      });
-      const missing = memberRows.filter((row) => !row.checkins?.[period.key]).length;
-      return `<div><strong>${period.label}打卡</strong><span>${counts.join(" · ")} · 未打卡 ${missing}</span></div>`;
-    }).join("");
-    return `
-      <article class="checkin-summary-card">
-        <div class="checkin-summary-head">
-          <strong>${escapeHtml(group)}</strong>
-          <span>${members.length} 人 · 全部完成 ${allDone} · 有迟到 ${anyLate}</span>
-        </div>
-        <div class="checkin-summary-lines">${periodRows}</div>
-      </article>
-    `;
-  }).join("") || `<div class="hint">还没有分组。</div>`;
 }
 function renderHistory() {
   const rows = Object.values(data.records).sort((a, b) => `${b.date}|${b.member}`.localeCompare(`${a.date}|${a.member}`));
@@ -1165,15 +1105,30 @@ function renderPersonalTable(days, aggregate, scope, member) {
   $("personalBody").innerHTML = rows.join("");
 }
 function renderBackups() {
-  $("backupList").innerHTML = `
-    <div class="hint">网页端不写入浏览器本地缓存或本地备份。记录、配置和打卡选项仅在解锁后写入云端数据接口。</div>
-  `;
+  const backups = readBackups();
+  $("backupList").innerHTML = backups.map((item) => `
+    <div class="backup-item">
+      <span>${escapeHtml(item.label)} · ${new Date(item.created_at).toLocaleString("zh-CN")}</span>
+      <button data-backup="${escapeAttr(item.id)}">恢复</button>
+    </div>
+  `).join("") || `<div class="hint">还没有本地备份。保存和导入前会自动生成。</div>`;
+  $("backupList").querySelectorAll("button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const item = readBackups().find((backup) => backup.id === btn.dataset.backup);
+      if (!item || !confirm("确定恢复这个备份？当前数据会先再备份一次。")) return;
+      createBackup("恢复前备份");
+      data = normalize(item.data);
+      currentMember = data.members[0];
+      loadForm();
+      render();
+      persistEverywhere();
+    });
+  });
 }
 function renderAdminSettings() {
   $("autoAuditToggle").checked = data.autoAudit !== false;
   $("sheetBackupToggle").checked = data.sheetBackupEnabled !== false;
   $("backupCleanupToggle").checked = data.backupCleanupEnabled === true;
-  $("autoUpdateToggle").checked = data.autoUpdateEnabled !== false;
   $("passMessagesInput").value = (data.reviewMessages?.pass || defaultData.reviewMessages.pass).join("\n");
   $("failMessagesInput").value = (data.reviewMessages?.fail || defaultData.reviewMessages.fail).join("\n");
 }
@@ -1181,7 +1136,6 @@ function collectAdminSettings() {
   data.autoAudit = $("autoAuditToggle").checked;
   data.sheetBackupEnabled = $("sheetBackupToggle").checked;
   data.backupCleanupEnabled = $("backupCleanupToggle").checked;
-  data.autoUpdateEnabled = $("autoUpdateToggle").checked;
   data.reviewMessages = {
     pass: $("passMessagesInput").value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).slice(0, 30),
     fail: $("failMessagesInput").value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).slice(0, 30)
@@ -1195,9 +1149,7 @@ function render() {
   renderMemberQuotas();
   renderMemberGroups();
   renderMemberItemConfig();
-  renderCheckinOptionsConfig();
   renderEntryInputs(readEntryInputs());
-  renderCheckinInputs();
   renderOverview();
   renderHistory();
   renderBackups();
@@ -1206,7 +1158,14 @@ function render() {
   preview();
 }
 function setView(view) {
-  if (!appUnlocked) return;
+  if (view === "admin" && !adminUnlocked) {
+    const password = prompt("请输入管理员密码");
+    if (password !== String(data.adminPassword || "999")) {
+      alert("管理员密码不正确。");
+      return;
+    }
+    adminUnlocked = true;
+  }
   activeView = view;
   document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === view));
   document.querySelectorAll(".view").forEach((section) => section.classList.remove("active"));
@@ -1224,84 +1183,96 @@ function showDialog(title, message, field) {
 function closeDialog() {
   $("dialog").classList.remove("show");
 }
-function renderUpdateState(state = {}) {
-  const text = $("updateStatusText");
-  if (!text) return;
-  text.textContent = state.message || "网页版本已移除软件自动更新；请通过服务器部署更新代码。";
-  const installButton = $("installUpdateBtn");
-  if (installButton) installButton.disabled = true;
-  if (state.autoCheck !== undefined && $("autoUpdateToggle")) {
-    $("autoUpdateToggle").checked = state.autoCheck !== false;
-  }
-}
-function initSoftwareUpdates() {
-  renderUpdateState();
-  if ($("checkUpdateBtn")) $("checkUpdateBtn").disabled = true;
-  if ($("installUpdateBtn")) $("installUpdateBtn").disabled = true;
-}
-async function unlockApp() {
+function unlockApp() {
   const password = $("appPasswordInput").value;
-  if (!password) {
-    $("lockHint").textContent = "请输入密码";
+  if (password !== String(data.adminPassword || "999")) {
+    $("lockHint").textContent = "密码不正确";
     $("appPasswordInput").select();
     return;
   }
-  $("lockHint").textContent = "正在连接云端...";
-  $("unlockBtn").disabled = true;
-  try {
-    cloudPassword = password;
-    data = await unlockCloud(password);
-    lastCloudSnapshot = clone(data);
-    currentMember = data.members.includes(currentMember) ? currentMember : data.members[0];
-    appUnlocked = true;
-    adminUnlocked = true;
-    $("lockScreen").classList.add("hidden");
-    $("appPasswordInput").value = "";
-    $("syncLabel").textContent = `云端已连接 · ${new Date().toLocaleTimeString("zh-CN")}`;
-    loadForm();
-    render();
-    setView(activeView);
-    startCloudPolling();
-  } catch (err) {
-    cloudPassword = "";
-    $("lockHint").textContent = err.message.includes("Failed to fetch")
-      ? "云端接口不可用，请通过 npm start 或已部署的网址访问。"
-      : err.message;
-    $("appPasswordInput").select();
-  } finally {
-    $("unlockBtn").disabled = false;
-  }
-}
-async function refreshCloudData(forceRender = true) {
-  if (!appUnlocked || !cloudPassword) return;
-  const remote = normalize(await readRemoteData());
-  const remoteStamp = String(remote.updated_at || "");
-  const localStamp = String(data.updated_at || "");
-  if (!forceRender && remoteStamp && remoteStamp === localStamp) return;
-  const shouldRender = forceRender || Boolean(remoteStamp && remoteStamp !== localStamp);
-  data = mergeCloudData(remote, data, "records");
-  lastCloudSnapshot = clone(remote);
-  if (!data.members.includes(currentMember)) currentMember = data.members[0];
-  if (shouldRender) {
-    loadForm();
-    render();
-  }
-  $("syncLabel").textContent = `云端已刷新 · ${new Date().toLocaleTimeString("zh-CN")}`;
-}
-function startCloudPolling() {
-  window.clearInterval(pollTimer);
-  pollTimer = window.setInterval(() => refreshCloudData(false).catch(() => {
-    $("syncLabel").textContent = "云端暂时不可读，等待下次刷新";
-  }), 3000);
+  appUnlocked = true;
+  $("lockScreen").classList.add("hidden");
+  $("appPasswordInput").value = "";
 }
 async function chooseSharedFile() {
-  await refreshCloudData(true);
+  if (desktopApp?.isDesktop) {
+    const result = await desktopApp.chooseCloudFolder(data);
+    if (!result) return;
+    if (result.error) throw new Error(result.error);
+    createBackup("切换云端文件夹前备份");
+    if (result.text?.trim()) data = normalize(JSON.parse(result.text));
+    lastFileModified = result.mtime || 0;
+    $("syncLabel").textContent = `软件同步：${result.path}`;
+    if (!data.members.includes(currentMember)) currentMember = data.members[0];
+    persistLocal();
+    loadForm();
+    render();
+    return;
+  }
+  if ("showDirectoryPicker" in window) {
+    const dir = await window.showDirectoryPicker({ mode: "readwrite" });
+    await useCloudDirectory(dir, true);
+    return;
+  }
+  const canOpen = "showOpenFilePicker" in window;
+  const canSave = "showSaveFilePicker" in window;
+  if (!canOpen && !canSave) {
+    alert("当前浏览器不支持直接写入共享文件。请用新版 Chrome/Edge，或使用导入/导出。");
+    return;
+  }
+  const pickerOptions = {
+    types: [{ description: "JSON 数据文件", accept: { "application/json": [".json"] } }]
+  };
+  let handle;
+  const createNew = canSave && !confirm("选择已有云端数据文件点“确定”；在 Google Drive 目录中新建文件点“取消”。");
+  if (createNew) {
+    handle = await window.showSaveFilePicker({ ...pickerOptions, suggestedName: "report_data.json" });
+  } else {
+    [handle] = await window.showOpenFilePicker({ ...pickerOptions, multiple: false });
+  }
+  fileHandle = handle;
+  const file = await handle.getFile();
+  lastFileModified = file.lastModified;
+  const text = await file.text();
+  createBackup(createNew ? "新建云端文件前备份" : "切换云端文件前备份");
+  if (text.trim()) data = normalize(JSON.parse(text));
+  persistLocal();
+  $("syncLabel").textContent = `共享文件：${file.name}`;
+  if (!data.members.includes(currentMember)) currentMember = data.members[0];
+  loadForm();
+  render();
+  if (!text.trim() || createNew) await persistEverywhere();
 }
 async function pollSharedFile() {
+  if (desktopApp?.isDesktop) {
+    const result = await desktopApp.pollCloudData();
+    if (!result || result.unchanged) return;
+    if (result.error) {
+      $("syncLabel").textContent = `软件同步暂时不可读：${result.error}`;
+      return;
+    }
+    createBackup("云端刷新前备份");
+    data = normalize(JSON.parse(result.text || "{}"));
+    lastFileModified = result.mtime || lastFileModified;
+    $("syncLabel").textContent = `软件同步：${result.path}`;
+    if (!data.members.includes(currentMember)) currentMember = data.members[0];
+    loadForm();
+    render();
+    return;
+  }
+  if (!fileHandle) return;
   try {
-    await refreshCloudData(false);
+    const file = await fileHandle.getFile();
+    if (file.lastModified && file.lastModified !== lastFileModified) {
+      lastFileModified = file.lastModified;
+      createBackup("云端刷新前备份");
+      data = normalize(JSON.parse(await file.text()));
+      if (!data.members.includes(currentMember)) currentMember = data.members[0];
+      loadForm();
+      render();
+    }
   } catch {
-    $("syncLabel").textContent = "云端暂时不可读，等待下次刷新";
+    $("syncLabel").textContent = "共享文件暂时不可读，继续使用本地副本";
   }
 }
 function exportData() {
@@ -1342,15 +1313,13 @@ function rowsToWorksheet(name, rows) {
 function buildThreeMonthWorkbookXml() {
   const itemNames = configuredItems();
   const records = recordsInLastMonths(3);
-  const header = ["日期", "成员", "分组", ...checkinPeriods.map((period) => `${period.label}打卡`), ...itemNames, "原始", "换算", "定额", "差额", "状态", "备注"];
+  const header = ["日期", "成员", "分组", ...itemNames, "原始", "换算", "定额", "差额", "状态", "备注"];
   const recordRow = (rec) => {
     const quota = memberQuota(rec.member, rec.date);
-    const checkins = recordCheckins(rec);
     return [
       rec.date,
       rec.member,
       data.memberGroups?.[rec.member] || "",
-      ...checkinPeriods.map((period) => checkins[period.key] || "未打卡"),
       ...itemNames.map((name) => Number(rec.items?.[name] || 0)),
       Number(rec.raw_total || 0),
       Number(rec.weighted_total || 0),
@@ -1393,7 +1362,7 @@ function buildThreeMonthWorkbookXml() {
 }
 function buildCsvBackups() {
   const itemNames = configuredItems();
-  const rows = [["日期", "成员", ...checkinPeriods.map((period) => `${period.label}打卡`), ...itemNames, "原始", "换算", "定额", "差额", "状态", "备注"]];
+  const rows = [["日期", "成员", ...itemNames, "原始", "换算", "定额", "差额", "状态", "备注"]];
   Object.values(data.records)
     .sort((a, b) => `${a.date}|${a.member}`.localeCompare(`${b.date}|${b.member}`))
     .forEach((rec) => {
@@ -1401,7 +1370,6 @@ function buildCsvBackups() {
       rows.push([
         rec.date,
         rec.member,
-        ...checkinPeriods.map((period) => recordCheckins(rec)[period.key] || "未打卡"),
         ...itemNames.map((name) => rec.items?.[name] || 0),
         rec.raw_total || 0,
         rec.weighted_total || 0,
@@ -1437,6 +1405,13 @@ async function backupSheets(silent = false) {
     { name: `daily_report_3months_${stamp}.xls`, text: buildThreeMonthWorkbookXml() },
     ...buildCsvBackups()
   ];
+  if (desktopApp?.isDesktop) {
+    const result = await desktopApp.writeCsvBackup(files);
+    if (result?.folder) {
+      if (!silent) showDialog("表格备份已生成", `3个月表格和 CSV 已写入：${result.folder}。放在 Google Drive 同步目录里后，可用 Google 表格打开。`, "");
+      return;
+    }
+  }
   if (silent) return;
   files.forEach((file) => {
     const blob = new Blob([file.text], { type: file.name.endsWith(".xls") ? "application/vnd.ms-excel;charset=utf-8" : "text/csv;charset=utf-8" });
@@ -1449,11 +1424,11 @@ async function backupSheets(silent = false) {
 }
 function importData(file) {
   const reader = new FileReader();
-  reader.onload = async () => {
+  reader.onload = () => {
     createBackup("导入前备份");
     data = normalize(JSON.parse(String(reader.result || "{}")));
+    persistLocal();
     if (!data.members.includes(currentMember)) currentMember = data.members[0];
-    await persistEverywhere("admin");
     loadForm();
     render();
   };
@@ -1470,10 +1445,9 @@ async function saveAdminConfig() {
   createBackup("保存配置前备份");
   persistLocal();
   await persistEverywhere("admin");
-  if (nextPassword) cloudPassword = nextPassword;
   render();
   $("adminSaveStatus").textContent = `配置已保存并同步 · ${new Date().toLocaleString("zh-CN")}`;
-  showDialog("配置已保存", "项目、定额、成员名单和打卡选项已经写入云端。其他成员刷新后会自动更新。", "");
+  showDialog("配置已保存", "项目、定额和成员名单已经写入共享数据。其他成员同步后会自动更新。", "");
 }
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (s) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[s] || s));
@@ -1510,7 +1484,7 @@ function bindEvents() {
     setDailyMemberQuota(currentMember, currentDate, $("dailyQuotaInput").value);
     preview();
     renderOverview();
-    scheduleSave("records");
+    persistLocal();
   };
   $("adminQuotaDate").value = currentDate;
   $("adminQuotaDate").onchange = renderMemberQuotas;
@@ -1531,13 +1505,6 @@ function bindEvents() {
   $("autoAuditToggle").onchange = () => { collectAdminSettings(); scheduleSave("admin"); };
   $("sheetBackupToggle").onchange = () => { collectAdminSettings(); scheduleSave("admin"); };
   $("backupCleanupToggle").onchange = () => { collectAdminSettings(); scheduleSave("admin"); };
-  $("autoUpdateToggle").onchange = () => {
-    collectAdminSettings();
-    renderUpdateState();
-    scheduleSave("admin");
-  };
-  $("checkUpdateBtn").onclick = () => renderUpdateState({ message: "网页版本请在服务器上部署新版代码。" });
-  $("installUpdateBtn").onclick = () => renderUpdateState({ message: "网页版本没有本地安装包更新流程。" });
   $("passMessagesInput").onchange = () => { collectAdminSettings(); scheduleSave("admin"); };
   $("failMessagesInput").onchange = () => { collectAdminSettings(); scheduleSave("admin"); };
   ["analysisScope", "analysisGroup", "analysisMember", "analysisRange", "analysisCustomDays", "analysisCompare", "rangeStart", "rangeEnd"].forEach((id) => {
@@ -1587,10 +1554,6 @@ function bindEvents() {
   $("addMemberBtn").onclick = () => addMember($("memberName").value.trim());
   $("adminAddMemberBtn").onclick = () => addMember($("adminMemberName").value.trim());
   $("addGroupBtn").onclick = () => addGroup($("groupNameInput").value.trim());
-  $("addCheckinOptionBtn").onclick = () => addCheckinOption($("checkinOptionInput").value);
-  $("checkinOptionInput").onkeydown = (event) => {
-    if (event.key === "Enter") addCheckinOption($("checkinOptionInput").value);
-  };
   $("compactToggle").onchange = () => $("app").classList.toggle("compact", $("compactToggle").checked);
   $("openFileBtn").onclick = () => chooseSharedFile().catch((err) => alert(`打开失败：${err.message}`));
   $("exportBtn").onclick = exportData;
@@ -1620,6 +1583,11 @@ function bindEvents() {
     tab.addEventListener("click", () => setView(tab.dataset.view || "entry"));
   });
 }
+pruneBackups();
+createBackup("每日自动备份");
 bindEvents();
-initSoftwareUpdates();
-$("syncLabel").textContent = "云端未解锁";
+loadForm();
+render();
+setView(activeView);
+restoreCloudDirectory();
+window.setInterval(pollSharedFile, 1800);
