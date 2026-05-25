@@ -105,6 +105,7 @@
             <div>
               <span class="eyebrow">整体预览</span>
               <h2 id="overviewTitle">今日达标情况</h2>
+              <small class="hint" id="overviewScopeHint">当前查看：当前文件夹</small>
             </div>
             <div class="overview-date">
               <label>查看日期 <input id="overviewDateInput" type="date"></label>
@@ -117,6 +118,10 @@
               <div><span>总定额</span><strong id="teamQuota">0</strong></div>
               <div><span>总差额</span><strong id="teamDiff">0</strong></div>
             </div>
+          </section>
+          <section class="panel source-switch-panel">
+            <div class="panel-head"><h2>查看范围</h2><span class="hint">高级管理员可切换多个来源文件夹</span></div>
+            <div class="source-tabs" id="reportSourceTabs"></div>
           </section>
           <section class="panel">
             <div class="panel-head"><h2>成员达标表</h2><span class="hint" id="overviewHint"></span></div>
@@ -174,6 +179,7 @@
               <div class="progress-blocks" id="analysisBlocks"></div>
             </div>
             <div class="table-scroll">
+              <div class="person-tabs" id="analysisPersonTabs"></div>
               <table>
                 <thead id="personalHead"></thead>
                 <tbody id="personalBody"></tbody>
@@ -259,6 +265,8 @@
             <div class="panel-head"><h2>同步与备份</h2><span class="hint" id="adminSaveStatus">本地自动保留 90 天</span></div>
             <div class="sync-status-grid" id="syncStatusBox"></div>
             <div class="summary-folder-actions">
+              <button class="primary" id="elevateSuperAdminBtn">提升高级管理员权限</button>
+              <button id="refreshSourceFoldersBtn">刷新来源数据</button>
               <button id="addSourceFolderBtn">添加来源文件夹</button>
               <button id="clearSourceFoldersBtn">清空来源</button>
               <button id="chooseSummaryFolderBtn">选择汇总文件夹</button>

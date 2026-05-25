@@ -37,6 +37,12 @@ let sourceDirHandles = [];
 let sourceDirLabels = [];
 let summaryDirHandle = null;
 let summaryLocationLabel = "";
+let superAdminUnlocked = false;
+let activeReportSource = "current";
+let sourceDatasets = [];
+let mergedSourceDataset = null;
+let reportDataOverride = null;
+let analysisTableMember = "";
 let pendingDialogField = "";
 let activeView = "entry";
 let saveTimer = 0;
@@ -401,6 +407,65 @@ function setSyncStatus(message, location = cloudLocationLabel) {
   if ($("syncLabel")) $("syncLabel").textContent = cloudLocationLabel ? `${syncStatusText}：${cloudLocationLabel}` : syncStatusText;
   renderSyncPanel();
 }
+function reportData() {
+  return reportDataOverride || data;
+}
+function withReportData(nextData, callback) {
+  const previous = reportDataOverride;
+  reportDataOverride = nextData || data;
+  try {
+    return callback();
+  } finally {
+    reportDataOverride = previous;
+  }
+}
+function selectedReportData() {
+  if (!superAdminUnlocked) return data;
+  if (activeReportSource === "all") return mergedSourceDataset || buildMergedSourceDataset();
+  const match = activeReportSource.match(/^source:(\d+)$/);
+  if (match) return sourceDatasets[Number(match[1])]?.data || data;
+  return data;
+}
+function selectedReportLabel() {
+  if (!superAdminUnlocked) return "当前文件夹";
+  if (activeReportSource === "all") return "全部汇总";
+  const match = activeReportSource.match(/^source:(\d+)$/);
+  if (match) return sourceDatasets[Number(match[1])]?.label || "来源文件夹";
+  return "当前文件夹";
+}
+function buildMergedSourceDataset() {
+  let merged = normalize(data);
+  sourceDatasets.forEach((source) => {
+    merged = mergeSummaryData(merged, source.data);
+  });
+  mergedSourceDataset = normalize(merged);
+  return mergedSourceDataset;
+}
+function renderReportSourceTabs() {
+  const box = $("reportSourceTabs");
+  if (!box) return;
+  if (!superAdminUnlocked) {
+    box.innerHTML = `<span class="hint">当前：普通管理员视图</span>`;
+    return;
+  }
+  const tabs = [
+    { id: "current", label: "当前文件夹" },
+    { id: "all", label: `全部汇总 ${sourceDatasets.length}` },
+    ...sourceDatasets.map((source, index) => ({ id: `source:${index}`, label: source.label }))
+  ];
+  box.innerHTML = tabs.map((tab) => `
+    <button class="tab mini ${activeReportSource === tab.id ? "active" : ""}" data-report-source="${escapeAttr(tab.id)}">${escapeHtml(tab.label)}</button>
+  `).join("");
+  box.querySelectorAll("[data-report-source]").forEach((button) => {
+    button.onclick = () => {
+      activeReportSource = button.dataset.reportSource || "current";
+      analysisTableMember = "";
+      renderOverview();
+      renderHistory();
+      renderReportSourceTabs();
+    };
+  });
+}
 function renderSyncPanel() {
   const box = $("syncStatusBox");
   if (!box) return;
@@ -416,6 +481,16 @@ function renderSyncPanel() {
 function renderSummaryFolders() {
   const box = $("summaryFolderBox");
   if (!box) return;
+  const sourceStats = sourceDatasets.map((source, index) => {
+    const recordCount = Object.keys(source.data.records || {}).length;
+    const memberCount = source.data.members?.length || 0;
+    return `
+      <button class="summary-source-card ${activeReportSource === `source:${index}` ? "active" : ""}" data-report-source="source:${index}">
+        <strong>${escapeHtml(source.label)}</strong>
+        <span>${memberCount} 人 · ${recordCount} 条${source.error ? ` · ${escapeHtml(source.error)}` : ""}</span>
+      </button>
+    `;
+  }).join("");
   box.innerHTML = `
     <div class="summary-folder-line">
       <span>来源文件夹</span>
@@ -425,7 +500,21 @@ function renderSummaryFolders() {
       <span>汇总文件夹</span>
       <strong>${escapeHtml(summaryLocationLabel || "未选择")}</strong>
     </div>
+    <div class="summary-folder-line">
+      <span>高级管理员</span>
+      <strong>${superAdminUnlocked ? `已开启 · 当前查看 ${escapeHtml(selectedReportLabel())}` : "未提升"}</strong>
+    </div>
+    <div class="summary-source-grid">${sourceStats || `<div class="hint">提升高级管理员权限后，可加载并切换多个来源文件夹的数据。</div>`}</div>
   `;
+  box.querySelectorAll("[data-report-source]").forEach((button) => {
+    button.onclick = () => {
+      activeReportSource = button.dataset.reportSource || "current";
+      renderReportSourceTabs();
+      renderOverview();
+      renderHistory();
+      renderSummaryFolders();
+    };
+  });
 }
 function startCloudPolling() {
   window.clearInterval(syncPollTimer);
@@ -441,13 +530,14 @@ function quotaValue(value) {
   return value === "" || value === undefined || value === null ? null : Number(value);
 }
 function memberQuota(member, day = currentDate) {
-  const daily = data.dailyQuotas?.[day];
+  const report = reportData();
+  const daily = report.dailyQuotas?.[day];
   const dailyOwn = quotaValue(daily?.members?.[member]);
   if (dailyOwn !== null) return dailyOwn;
   const dailyDefault = quotaValue(daily?.default);
   if (dailyDefault !== null) return dailyDefault;
-  const own = quotaValue(data.memberQuotas?.[member]);
-  return own === null ? Number(data.quota || 0) : own;
+  const own = quotaValue(report.memberQuotas?.[member]);
+  return own === null ? Number(report.quota || 0) : own;
 }
 function setDailyDefaultQuota(day, value) {
   const entry = dailyQuotaEntry(day);
@@ -463,7 +553,8 @@ function dailyMemberQuotaValue(member, day = currentDate) {
   return value === undefined || value === null ? "" : Number(value);
 }
 function groupMembers(group) {
-  return data.members.filter((member) => (data.memberGroups?.[member] || data.groups[0]) === group);
+  const report = reportData();
+  return report.members.filter((member) => (report.memberGroups?.[member] || report.groups[0]) === group);
 }
 function dateFromKey(key) {
   const date = new Date(`${key}T00:00:00`);
@@ -482,11 +573,12 @@ function periodKeys(endKey, days) {
   return Array.from({ length: days }, (_, index) => addDays(endKey, index - days + 1));
 }
 function recordFor(day, member) {
-  return data.records[`${day}|${member}`] || null;
+  return reportData().records[`${day}|${member}`] || null;
 }
 function aggregatePeriod(days, scope, member) {
-  const group = $("analysisGroup")?.value || data.groups[0];
-  const members = scope === "member" ? [member] : scope === "group" ? groupMembers(group) : data.members;
+  const report = reportData();
+  const group = $("analysisGroup")?.value || report.groups[0];
+  const members = scope === "member" ? [member] : scope === "group" ? groupMembers(group) : report.members;
   const itemNames = configuredItems();
   const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
   const daily = days.map((day) => {
@@ -525,7 +617,7 @@ function renderMiniBars(containerId, rows, valueKey = "weighted") {
   }).join("") || `<div class="hint">还没有可分析的数据。</div>`;
 }
 function configuredItems() {
-  return Object.keys(data.rules);
+  return Object.keys(reportData().rules);
 }
 function memberVisibleItems(member = currentMember) {
   const group = data.memberGroups?.[member] || data.groups[0];
@@ -1032,10 +1124,14 @@ function removeMember(name) {
   scheduleSave("admin");
 }
 function renderOverview() {
+  if (!reportDataOverride) return withReportData(selectedReportData(), renderOverview);
+  const report = reportData();
+  renderReportSourceTabs();
+  if ($("overviewScopeHint")) $("overviewScopeHint").textContent = `当前查看：${selectedReportLabel()}`;
   $("overviewDateInput").value = currentDate;
   const itemNames = configuredItems();
-  const rows = data.members.map((member) => {
-    const rec = data.records[`${currentDate}|${member}`];
+  const rows = report.members.map((member) => {
+    const rec = report.records[`${currentDate}|${member}`];
     const quota = memberQuota(member, currentDate);
     const weighted = Number(rec?.weighted_total || 0);
     const status = rec?.status || "待审核";
@@ -1061,7 +1157,7 @@ function renderOverview() {
   $("teamQuota").textContent = `${fmt(totalQuota)} ${teamPassed ? "✓" : ""}`;
   $("teamDiff").textContent = `${totalWeighted - totalQuota >= 0 ? "+" : ""}${fmt(totalWeighted - totalQuota)}`;
   $("overviewHint").textContent = `${rows.length} 位成员 · 小组${teamPassed ? "已完成" : "未完成"}总定额`;
-  $("overviewGrid").innerHTML = rows.map((row) => `
+  const rowCard = (row) => `
     <article class="person-card ${row.passed ? "pass" : "fail"}" data-overview-member="${escapeAttr(row.member)}" title="点击查看个人今日">
       <div class="person-top">
         <span>${escapeHtml(row.member)}</span>
@@ -1073,9 +1169,27 @@ function renderOverview() {
       <div class="hint">${escapeHtml(checkinSummary(row.checkins))}</div>
       <div class="hint">${escapeHtml(row.rec?.reason || row.rec?.harvest || "暂无备注")}</div>
     </article>
-  `).join("");
+  `;
+  $("overviewGrid").innerHTML = report.groups.map((group) => {
+    const groupRows = rows.filter((row) => (report.memberGroups?.[row.member] || report.groups[0]) === group);
+    const groupWeighted = groupRows.reduce((sum, row) => sum + row.weighted, 0);
+    const groupQuota = groupRows.reduce((sum, row) => sum + row.quota, 0);
+    return `
+      <details class="overview-group" open>
+        <summary>
+          <span>${escapeHtml(group)} · ${groupRows.length} 人</span>
+          <strong>${fmt(groupWeighted)} / ${fmt(groupQuota)}</strong>
+        </summary>
+        <div class="member-grid">${groupRows.map(rowCard).join("") || `<div class="hint">这个分组还没有成员。</div>`}</div>
+      </details>
+    `;
+  }).join("");
   $("overviewGrid").querySelectorAll("[data-overview-member]").forEach((card) => {
     card.onclick = () => {
+      if (!data.members.includes(card.dataset.overviewMember)) {
+        showDialog("汇总成员", "这个成员来自高级管理员汇总视图。请切回对应来源文件夹后再编辑个人记录。", "");
+        return;
+      }
       currentMember = card.dataset.overviewMember;
       loadForm();
       setView("entry");
@@ -1123,8 +1237,10 @@ function renderOverview() {
   renderAnalytics();
 }
 function renderHistory() {
-  const rows = Object.values(data.records).sort((a, b) => `${b.date}|${b.member}`.localeCompare(`${a.date}|${a.member}`));
-  $("historyCount").textContent = `${rows.length} 条记录`;
+  if (!reportDataOverride) return withReportData(selectedReportData(), renderHistory);
+  const report = reportData();
+  const rows = Object.values(report.records).sort((a, b) => `${b.date}|${b.member}`.localeCompare(`${a.date}|${a.member}`));
+  $("historyCount").textContent = `${selectedReportLabel()} · ${rows.length} 条记录`;
   $("historyBody").innerHTML = rows.map((r) => `
     <tr>
       <td>${escapeHtml(r.date || "")}</td>
@@ -1137,16 +1253,18 @@ function renderHistory() {
   `).join("") || `<tr><td colspan="6" class="hint">还没有历史记录。</td></tr>`;
 }
 function renderAnalysisMemberOptions() {
+  const report = reportData();
   const select = $("analysisMember");
   const current = select.value || currentMember;
-  select.innerHTML = data.members.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join("");
-  select.value = data.members.includes(current) ? current : currentMember;
+  select.innerHTML = report.members.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join("");
+  select.value = report.members.includes(current) ? current : report.members[0] || currentMember;
   const groupSelect = $("analysisGroup");
-  const currentGroup = groupSelect.value || data.groups[0];
-  groupSelect.innerHTML = data.groups.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join("");
-  groupSelect.value = data.groups.includes(currentGroup) ? currentGroup : data.groups[0];
+  const currentGroup = groupSelect.value || report.groups[0];
+  groupSelect.innerHTML = report.groups.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join("");
+  groupSelect.value = report.groups.includes(currentGroup) ? currentGroup : report.groups[0];
 }
 function renderAnalytics() {
+  if (!reportDataOverride) return withReportData(selectedReportData(), renderAnalytics);
   renderAnalysisMemberOptions();
   const scope = $("analysisScope").value || "team";
   const member = $("analysisMember").value || currentMember;
@@ -1245,9 +1363,32 @@ function buildDateRange(start, end) {
   }
   return days.length ? days : [currentDate];
 }
+function renderAnalysisPersonTabs(members, scope, member) {
+  const box = $("analysisPersonTabs");
+  if (!box) return;
+  if (scope === "member" || members.length <= 1) {
+    analysisTableMember = member;
+    box.innerHTML = "";
+    return;
+  }
+  if (!analysisTableMember || !members.includes(analysisTableMember)) analysisTableMember = members[0];
+  box.innerHTML = members.map((name) => `
+    <button class="tab mini ${analysisTableMember === name ? "active" : ""}" data-analysis-person="${escapeAttr(name)}">${escapeHtml(name)}</button>
+  `).join("");
+  box.querySelectorAll("[data-analysis-person]").forEach((button) => {
+    button.onclick = () => {
+      analysisTableMember = button.dataset.analysisPerson || "";
+      renderAnalytics();
+    };
+  });
+}
 function renderPersonalTable(days, aggregate, scope, member) {
   const itemNames = configuredItems();
-  const members = scope === "member" ? [member] : scope === "group" ? groupMembers($("analysisGroup").value) : data.members;
+  const report = reportData();
+  const scopedMembers = scope === "member" ? [member] : scope === "group" ? groupMembers($("analysisGroup").value) : report.members;
+  renderAnalysisPersonTabs(scopedMembers, scope, member);
+  const members = scope === "member" ? [member] : [analysisTableMember || scopedMembers[0]].filter(Boolean);
+  const tableAggregate = scope === "member" ? aggregate : aggregatePeriod(days, "member", members[0]);
   $("personalHead").innerHTML = `
     <tr>
       <th>日期</th>
@@ -1264,7 +1405,7 @@ function renderPersonalTable(days, aggregate, scope, member) {
       const rec = recordFor(day, name);
       const items = rec?.items || {};
       const weighted = Number(rec?.weighted_total || 0);
-      const quota = memberQuota(name, currentDate);
+      const quota = memberQuota(name, day);
       rows.push(`
         <tr>
           <td>${escapeHtml(day)}</td>
@@ -1280,11 +1421,11 @@ function renderPersonalTable(days, aggregate, scope, member) {
   rows.push(`
     <tr>
       <th>合计</th>
-      <th>${scope === "member" ? escapeHtml(member) : "团队"}</th>
-      ${itemNames.map((name) => `<th>${fmt(aggregate.itemTotals[name] || 0)}</th>`).join("")}
-      <th>${fmt(aggregate.weighted)}</th>
-      <th>${fmt(aggregate.quota)}</th>
-      <th>${aggregate.diff >= 0 ? "+" : ""}${fmt(aggregate.diff)}</th>
+      <th>${scope === "member" ? escapeHtml(member) : escapeHtml(analysisTableMember || "团队")}</th>
+      ${itemNames.map((name) => `<th>${fmt(tableAggregate.itemTotals[name] || 0)}</th>`).join("")}
+      <th>${fmt(tableAggregate.weighted)}</th>
+      <th>${fmt(tableAggregate.quota)}</th>
+      <th>${tableAggregate.diff >= 0 ? "+" : ""}${fmt(tableAggregate.diff)}</th>
     </tr>
   `);
   $("personalBody").innerHTML = rows.join("");
@@ -1344,6 +1485,7 @@ function render() {
   renderAdminSettings();
   renderSyncPanel();
   renderSummaryFolders();
+  renderReportSourceTabs();
   $("quotaInput").value = String(data.quota);
   preview();
 }
@@ -1504,6 +1646,44 @@ async function writeDirectoryReport(dir, nextData) {
   await writable.write(JSON.stringify(normalize(nextData), null, 2));
   await writable.close();
 }
+async function refreshSourceDatasets() {
+  sourceDatasets = [];
+  for (let index = 0; index < sourceDirHandles.length; index += 1) {
+    const dir = sourceDirHandles[index];
+    try {
+      const sourceData = await readDirectoryReport(dir);
+      sourceDatasets.push({
+        label: sourceDirLabels[index] || dir.name || `来源 ${index + 1}`,
+        data: sourceData
+      });
+    } catch (error) {
+      sourceDatasets.push({
+        label: `${sourceDirLabels[index] || dir.name || `来源 ${index + 1}`}（读取失败）`,
+        data: normalize({}),
+        error: error.message
+      });
+    }
+  }
+  mergedSourceDataset = buildMergedSourceDataset();
+  if (activeReportSource.startsWith("source:")) {
+    const index = Number(activeReportSource.split(":")[1]);
+    if (!sourceDatasets[index]) activeReportSource = sourceDatasets.length ? "all" : "current";
+  }
+  renderSummaryFolders();
+  renderReportSourceTabs();
+  renderOverview();
+  renderHistory();
+}
+async function unlockSuperAdmin() {
+  const password = prompt("请输入管理员密码以提升高级管理员权限");
+  if (password !== String(data.adminPassword || "999")) return alert("管理员密码不正确。");
+  superAdminUnlocked = true;
+  document.body.classList.add("super-admin");
+  activeReportSource = sourceDirHandles.length ? "all" : "current";
+  await refreshSourceDatasets();
+  setView("overview");
+  showDialog("高级管理员已开启", "现在可以在整体预览顶部切换当前文件夹、全部汇总或单个来源文件夹。", "");
+}
 async function addSourceFolder() {
   if (!("showDirectoryPicker" in window)) return alert("当前浏览器不支持选择文件夹，请用新版 Chrome/Edge。");
   const dir = await window.showDirectoryPicker({ mode: "readwrite" });
@@ -1511,6 +1691,7 @@ async function addSourceFolder() {
   sourceDirHandles.push(dir);
   sourceDirLabels = sourceDirHandles.map((item) => item.name || "来源文件夹");
   await saveSummaryFolders();
+  if (superAdminUnlocked) await refreshSourceDatasets();
   renderSummaryFolders();
 }
 async function chooseSummaryFolder() {
@@ -1537,6 +1718,7 @@ async function syncSummaryFolder() {
   }
   merged.updated_at = new Date().toISOString();
   await writeDirectoryReport(summaryDirHandle, merged);
+  mergedSourceDataset = normalize(merged);
   data = normalize(merged);
   persistLocal();
   loadForm();
@@ -1548,8 +1730,13 @@ async function clearSourceFolders() {
   if (!confirm("确定清空来源文件夹列表？不会删除任何云端数据。")) return;
   sourceDirHandles = [];
   sourceDirLabels = [];
+  sourceDatasets = [];
+  mergedSourceDataset = null;
+  activeReportSource = "current";
   await saveSummaryFolders();
   renderSummaryFolders();
+  renderReportSourceTabs();
+  renderOverview();
 }
 function exportData() {
   saveFormSilently();
@@ -1838,6 +2025,8 @@ function bindEvents() {
     $("sidebarToggle").textContent = $("app").classList.contains("sidebar-collapsed") ? "›" : "‹";
   };
   $("addSourceFolderBtn").onclick = () => addSourceFolder().catch((err) => alert(`添加来源失败：${err.message}`));
+  $("elevateSuperAdminBtn").onclick = () => unlockSuperAdmin().catch((err) => alert(`提升失败：${err.message}`));
+  $("refreshSourceFoldersBtn").onclick = () => (superAdminUnlocked ? refreshSourceDatasets() : unlockSuperAdmin()).catch((err) => alert(`刷新失败：${err.message}`));
   $("clearSourceFoldersBtn").onclick = () => clearSourceFolders();
   $("chooseSummaryFolderBtn").onclick = () => chooseSummaryFolder().catch((err) => alert(`选择汇总失败：${err.message}`));
   $("syncSummaryFolderBtn").onclick = () => syncSummaryFolder().catch((err) => alert(`汇总失败：${err.message}`));

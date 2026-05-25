@@ -15,6 +15,18 @@
 - `.vercelignore` 只允许 Vercel 上传静态网页必需文件。
 - `vercel.json` 设置静态部署，无构建命令。
 - 本地语法检查使用 `npm run check`。
+- `.github/workflows/code-audit.yml` 执行语法检查和 `npm audit`。
+- `.github/workflows/codeql.yml` 执行 JavaScript/TypeScript CodeQL 扫描。
+- `.github/workflows/release.yml` 在 tag `v*` 上打包 Release zip，并使用 `actions/attest-build-provenance@v2` 生成安全构建证明。
+- 高级管理员汇总功能只读取用户显式选择的来源文件夹和汇总文件夹，不会扫描任意本地目录。
+
+## 本次功能变更审计
+
+- 新增“提升高级管理员权限”，需要重新输入管理员密码。
+- 高级管理员可加载多个来源文件夹，切换当前文件夹、全部汇总或单个来源文件夹查看。
+- 汇总写入只写到用户选择的汇总文件夹 `report_data.json`。
+- 整体预览按组折叠展示，降低信息过载。
+- 效率分析明细改为顶部成员标签切换，不再一次性展开所有成员明细。
 
 ## 注意
 
