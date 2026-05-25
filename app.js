@@ -10,6 +10,7 @@
   memberItems: {},
   memberQuotas: {},
   dailyQuotas: {},
+  checkinOptions: ["准时上线", "迟到"],
   adminPassword: "999",
   sheetBackupEnabled: true,
   backupCleanupEnabled: false,
@@ -32,12 +33,18 @@ let cloudLocationLabel = "";
 let syncStatusText = "未连接云端文件夹";
 let syncPollTimer = 0;
 let pollInProgress = false;
+let sourceDirHandles = [];
+let sourceDirLabels = [];
+let summaryDirHandle = null;
+let summaryLocationLabel = "";
 let pendingDialogField = "";
 let activeView = "entry";
 let saveTimer = 0;
+let draftTimer = 0;
 let adminUnlocked = false;
 let showAllEntryItems = false;
 let appUnlocked = false;
+let collapsedGroups = JSON.parse(localStorage.getItem("dailyReportCollapsedGroups") || "{}");
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Number(n || 0).toLocaleString("zh-CN", { maximumFractionDigits: 3 });
 const recordKey = () => `${currentDate}|${currentMember}`;
@@ -63,6 +70,9 @@ function normalize(source) {
   });
   const memberQuotas = { ...(loaded.memberQuotas || {}) };
   const dailyQuotas = loaded.dailyQuotas && typeof loaded.dailyQuotas === "object" ? clone(loaded.dailyQuotas) : {};
+  const checkinOptions = Array.isArray(loaded.checkinOptions) && loaded.checkinOptions.length
+    ? Array.from(new Set(loaded.checkinOptions.map((item) => String(item).trim()).filter(Boolean)))
+    : clone(defaultData.checkinOptions);
   return {
     ...clone(defaultData),
     ...loaded,
@@ -76,6 +86,7 @@ function normalize(source) {
     memberItems,
     memberQuotas,
     dailyQuotas,
+    checkinOptions,
     adminPassword: String(loaded.adminPassword || defaultData.adminPassword),
     sheetBackupEnabled: loaded.sheetBackupEnabled !== false,
     backupCleanupEnabled: loaded.backupCleanupEnabled === true,
@@ -173,6 +184,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.memberItems = clone(local.memberItems || {});
     merged.memberQuotas = clone(local.memberQuotas || {});
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
+    merged.checkinOptions = clone(local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(local.quota || 0);
     merged.adminPassword = String(local.adminPassword || "999");
     merged.sheetBackupEnabled = local.sheetBackupEnabled !== false;
@@ -188,6 +200,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.memberItems = clone(remote.memberItems || local.memberItems || {});
     merged.memberQuotas = clone(remote.memberQuotas || local.memberQuotas || {});
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
+    merged.checkinOptions = clone(remote.checkinOptions || local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(remote.quota ?? local.quota ?? 0);
     merged.adminPassword = String(remote.adminPassword || local.adminPassword || "999");
     merged.sheetBackupEnabled = remote.sheetBackupEnabled !== false;
@@ -195,6 +208,27 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.autoAudit = remote.autoAudit !== false;
     merged.reviewMessages = clone(remote.reviewMessages || local.reviewMessages || defaultData.reviewMessages);
   }
+  return normalize(merged);
+}
+function mergeSummaryData(baseSource, sourceData) {
+  const base = normalize(baseSource);
+  const source = normalize(sourceData);
+  const merged = normalize({
+    ...base,
+    rules: { ...base.rules, ...source.rules },
+    members: Array.from(new Set([...base.members, ...source.members])),
+    groups: Array.from(new Set([...base.groups, ...source.groups])),
+    memberGroups: { ...base.memberGroups, ...source.memberGroups },
+    groupItems: { ...base.groupItems, ...source.groupItems },
+    memberItems: { ...base.memberItems, ...source.memberItems },
+    memberQuotas: { ...base.memberQuotas, ...source.memberQuotas },
+    dailyQuotas: mergeDailyQuotas(base.dailyQuotas, source.dailyQuotas, "records"),
+    checkinOptions: Array.from(new Set([...(base.checkinOptions || []), ...(source.checkinOptions || [])])),
+    records: { ...base.records }
+  });
+  Object.entries(source.records || {}).forEach(([key, record]) => {
+    merged.records[key] = newerRecord(record, merged.records[key]);
+  });
   return normalize(merged);
 }
 async function readRemoteData() {
@@ -254,6 +288,26 @@ async function saveCloudDirectory(dir) {
     tx.objectStore("handles").put(dir, "directory");
   } catch {}
 }
+async function saveDirectoryHandle(key, value) {
+  try {
+    const db = await openCloudDb();
+    const tx = db.transaction("handles", "readwrite");
+    tx.objectStore("handles").put(value, key);
+  } catch {}
+}
+async function loadDirectoryHandle(key) {
+  try {
+    const db = await openCloudDb();
+    return await new Promise((resolve) => {
+      const tx = db.transaction("handles", "readonly");
+      const request = tx.objectStore("handles").get(key);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
 async function loadCloudDirectory() {
   try {
     const db = await openCloudDb();
@@ -266,6 +320,19 @@ async function loadCloudDirectory() {
   } catch {
     return null;
   }
+}
+async function saveSummaryFolders() {
+  await saveDirectoryHandle("sourceDirectories", sourceDirHandles);
+  await saveDirectoryHandle("summaryDirectory", summaryDirHandle);
+}
+async function restoreSummaryFolders() {
+  const sources = await loadDirectoryHandle("sourceDirectories");
+  const summary = await loadDirectoryHandle("summaryDirectory");
+  sourceDirHandles = Array.isArray(sources) ? sources.filter(Boolean) : [];
+  sourceDirLabels = sourceDirHandles.map((dir) => dir.name || "来源文件夹");
+  summaryDirHandle = summary || null;
+  summaryLocationLabel = summaryDirHandle?.name || "";
+  renderSummaryFolders();
 }
 async function hasCloudPermission(dir) {
   if (!dir) return false;
@@ -318,10 +385,15 @@ async function restoreCloudDirectory() {
   const dir = await loadCloudDirectory();
   if (dir) await useCloudDirectory(dir, false);
   else setSyncStatus("未选择云端文件夹，正在使用本地缓存");
+  await restoreSummaryFolders();
 }
 function scheduleSave(mode = "records") {
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => persistEverywhere(mode), 180);
+}
+function scheduleDraftSave() {
+  window.clearTimeout(draftTimer);
+  draftTimer = window.setTimeout(() => saveFormSilently(), 220);
 }
 function setSyncStatus(message, location = cloudLocationLabel) {
   syncStatusText = message || syncStatusText;
@@ -339,6 +411,20 @@ function renderSyncPanel() {
     <div><span>后台刷新</span><strong>${escapeHtml(syncStatusText)}</strong></div>
     <div><span>本地缓存</span><strong>${recordCount} 条 · ${escapeHtml(cachedAt)}</strong></div>
     <div><span>刷新频率</span><strong>${fileHandle || desktopApp?.isDesktop ? `${syncPollMs / 1000} 秒` : "未启动"}</strong></div>
+  `;
+}
+function renderSummaryFolders() {
+  const box = $("summaryFolderBox");
+  if (!box) return;
+  box.innerHTML = `
+    <div class="summary-folder-line">
+      <span>来源文件夹</span>
+      <strong>${sourceDirLabels.length ? sourceDirLabels.map(escapeHtml).join("、") : "未添加"}</strong>
+    </div>
+    <div class="summary-folder-line">
+      <span>汇总文件夹</span>
+      <strong>${escapeHtml(summaryLocationLabel || "未选择")}</strong>
+    </div>
   `;
 }
 function startCloudPolling() {
@@ -474,10 +560,47 @@ function currentRecord() {
       harvest: "",
       diary: "",
       items: {},
+      checkins: {},
       updated_at: ""
     };
   }
   return data.records[recordKey()];
+}
+function checkinPeriods() {
+  return [
+    { key: "morning", label: "早" },
+    { key: "noon", label: "中" },
+    { key: "evening", label: "晚" }
+  ];
+}
+function readCheckins() {
+  const values = {};
+  document.querySelectorAll("select[data-checkin-period]").forEach((select) => {
+    values[select.dataset.checkinPeriod] = select.value;
+  });
+  return values;
+}
+function renderCheckins(seed = currentRecord().checkins || {}) {
+  const box = $("checkinInputs");
+  if (!box) return;
+  const options = data.checkinOptions?.length ? data.checkinOptions : defaultData.checkinOptions;
+  box.innerHTML = checkinPeriods().map((period) => `
+    <label class="checkin-field">
+      <span>${period.label}</span>
+      <select data-checkin-period="${period.key}">
+        ${options.map((option) => `<option value="${escapeAttr(option)}" ${seed[period.key] === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+      </select>
+    </label>
+  `).join("");
+  box.querySelectorAll("select[data-checkin-period]").forEach((select) => {
+    select.onchange = () => {
+      scheduleDraftSave();
+      renderOverview();
+    };
+  });
+}
+function checkinSummary(checkins = {}) {
+  return checkinPeriods().map((period) => `${period.label}:${checkins[period.key] || "未填"}`).join(" ");
 }
 function parseEntry(text) {
   const items = {};
@@ -544,6 +667,7 @@ function renderEntryInputs(seedItems = readEntryInputs()) {
     input.addEventListener("input", () => {
       $("entryText").value = itemsToText(readEntryInputs());
       preview();
+      scheduleDraftSave();
     });
   });
   $("entryText").value = itemsToText(readEntryInputs());
@@ -581,6 +705,7 @@ function loadForm() {
   $("reasonText").value = rec.reason || "";
   $("harvestText").value = rec.harvest || "";
   $("diaryText").value = rec.diary || "";
+  renderCheckins(rec.checkins || {});
   preview();
 }
 function saveFormSilently() {
@@ -607,6 +732,7 @@ function saveFormSilently() {
     reason: $("reasonText").value.trim(),
     harvest: $("harvestText").value.trim(),
     diary: $("diaryText").value.trim(),
+    checkins: readCheckins(),
     items: parsed.items,
     updated_at: new Date().toISOString()
   });
@@ -637,14 +763,19 @@ function renderMembers() {
   $("memberList").innerHTML = "";
   data.groups.forEach((group) => {
     const members = groupMembers(group);
-    const box = document.createElement("section");
+    const box = document.createElement("details");
     box.className = "member-group";
+    box.open = collapsedGroups[group] !== true;
     box.innerHTML = `
-      <div class="member-group-head">
+      <summary class="member-group-head">
         <span>${escapeHtml(group)} · ${members.length}</span>
         <button title="给 ${escapeAttr(group)} 添加成员" data-add-group-member="${escapeAttr(group)}">+</button>
-      </div>
+      </summary>
     `;
+    box.ontoggle = () => {
+      collapsedGroups[group] = !box.open;
+      localStorage.setItem("dailyReportCollapsedGroups", JSON.stringify(collapsedGroups));
+    };
     members.forEach((name) => {
       const btn = document.createElement("button");
       btn.className = `member ${name === currentMember ? "active" : ""}`;
@@ -911,7 +1042,7 @@ function renderOverview() {
     const passed = status === "达标" || weighted >= quota;
     const rate = quota > 0 ? Math.min(100, Math.round((weighted / quota) * 100)) : 100;
     const items = rec?.items || {};
-    return { member, rec, quota, weighted, passed, rate, items };
+    return { member, rec, quota, weighted, passed, rate, items, checkins: rec?.checkins || {} };
   });
   const pass = rows.filter((row) => row.passed).length;
   const fail = rows.length - pass;
@@ -931,7 +1062,7 @@ function renderOverview() {
   $("teamDiff").textContent = `${totalWeighted - totalQuota >= 0 ? "+" : ""}${fmt(totalWeighted - totalQuota)}`;
   $("overviewHint").textContent = `${rows.length} 位成员 · 小组${teamPassed ? "已完成" : "未完成"}总定额`;
   $("overviewGrid").innerHTML = rows.map((row) => `
-    <article class="person-card ${row.passed ? "pass" : "fail"}">
+    <article class="person-card ${row.passed ? "pass" : "fail"}" data-overview-member="${escapeAttr(row.member)}" title="点击查看个人今日">
       <div class="person-top">
         <span>${escapeHtml(row.member)}</span>
         <span class="status ${row.passed ? "pass" : "fail"}">${row.passed ? "达标" : "未达"}</span>
@@ -939,9 +1070,17 @@ function renderOverview() {
       <div class="progress" title="${row.rate}%"><span style="--w:${row.rate}%"></span></div>
       <div class="hint">换算 ${fmt(row.weighted)} / 定额 ${fmt(row.quota)}</div>
       <div class="hint">差额 ${row.weighted - row.quota >= 0 ? "+" : ""}${fmt(row.weighted - row.quota)}</div>
+      <div class="hint">${escapeHtml(checkinSummary(row.checkins))}</div>
       <div class="hint">${escapeHtml(row.rec?.reason || row.rec?.harvest || "暂无备注")}</div>
     </article>
   `).join("");
+  $("overviewGrid").querySelectorAll("[data-overview-member]").forEach((card) => {
+    card.onclick = () => {
+      currentMember = card.dataset.overviewMember;
+      loadForm();
+      setView("entry");
+    };
+  });
   $("detailHint").textContent = itemNames.map((name) => `${name} ${fmt(itemTotals[name])}`).join(" · ");
   $("detailHead").innerHTML = `
     <tr>
@@ -952,6 +1091,7 @@ function renderOverview() {
       <th>定额</th>
       <th>差额</th>
       <th>状态</th>
+      <th>打卡</th>
       <th>备注</th>
     </tr>
   `;
@@ -964,6 +1104,7 @@ function renderOverview() {
       <td>${fmt(row.quota)}</td>
       <td>${row.weighted - row.quota >= 0 ? "+" : ""}${fmt(row.weighted - row.quota)}</td>
       <td>${row.passed ? "达标" : "未达"}</td>
+      <td>${escapeHtml(checkinSummary(row.checkins))}</td>
       <td>${escapeHtml(row.rec?.reason || row.rec?.harvest || "")}</td>
     </tr>
   `).join("") + `
@@ -975,6 +1116,7 @@ function renderOverview() {
       <th>${fmt(totalQuota)}</th>
       <th>${totalWeighted - totalQuota >= 0 ? "+" : ""}${fmt(totalWeighted - totalQuota)}</th>
       <th>${teamPassed ? "完成" : "未完成"}</th>
+      <th></th>
       <th></th>
     </tr>
   `;
@@ -1172,6 +1314,7 @@ function renderAdminSettings() {
   $("autoAuditToggle").checked = data.autoAudit !== false;
   $("sheetBackupToggle").checked = data.sheetBackupEnabled !== false;
   $("backupCleanupToggle").checked = data.backupCleanupEnabled === true;
+  $("checkinOptionsInput").value = (data.checkinOptions || defaultData.checkinOptions).join("\n");
   $("passMessagesInput").value = (data.reviewMessages?.pass || defaultData.reviewMessages.pass).join("\n");
   $("failMessagesInput").value = (data.reviewMessages?.fail || defaultData.reviewMessages.fail).join("\n");
 }
@@ -1179,6 +1322,8 @@ function collectAdminSettings() {
   data.autoAudit = $("autoAuditToggle").checked;
   data.sheetBackupEnabled = $("sheetBackupToggle").checked;
   data.backupCleanupEnabled = $("backupCleanupToggle").checked;
+  data.checkinOptions = $("checkinOptionsInput").value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).slice(0, 20);
+  if (!data.checkinOptions.length) data.checkinOptions = clone(defaultData.checkinOptions);
   data.reviewMessages = {
     pass: $("passMessagesInput").value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).slice(0, 30),
     fail: $("failMessagesInput").value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).slice(0, 30)
@@ -1198,6 +1343,7 @@ function render() {
   renderBackups();
   renderAdminSettings();
   renderSyncPanel();
+  renderSummaryFolders();
   $("quotaInput").value = String(data.quota);
   preview();
 }
@@ -1343,6 +1489,67 @@ async function pollSharedFile(showIdle = true) {
   } finally {
     pollInProgress = false;
   }
+}
+async function readDirectoryReport(dir) {
+  if (!(await hasCloudPermission(dir))) throw new Error(`${dir.name || "文件夹"} 没有读写权限`);
+  const handle = await dir.getFileHandle("report_data.json", { create: false });
+  const file = await handle.getFile();
+  const text = await file.text();
+  return text.trim() ? normalize(JSON.parse(text)) : normalize({});
+}
+async function writeDirectoryReport(dir, nextData) {
+  if (!(await hasCloudPermission(dir))) throw new Error(`${dir.name || "汇总文件夹"} 没有读写权限`);
+  const handle = await dir.getFileHandle("report_data.json", { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(JSON.stringify(normalize(nextData), null, 2));
+  await writable.close();
+}
+async function addSourceFolder() {
+  if (!("showDirectoryPicker" in window)) return alert("当前浏览器不支持选择文件夹，请用新版 Chrome/Edge。");
+  const dir = await window.showDirectoryPicker({ mode: "readwrite" });
+  if (!(await hasCloudPermission(dir))) return;
+  sourceDirHandles.push(dir);
+  sourceDirLabels = sourceDirHandles.map((item) => item.name || "来源文件夹");
+  await saveSummaryFolders();
+  renderSummaryFolders();
+}
+async function chooseSummaryFolder() {
+  if (!("showDirectoryPicker" in window)) return alert("当前浏览器不支持选择文件夹，请用新版 Chrome/Edge。");
+  const dir = await window.showDirectoryPicker({ mode: "readwrite" });
+  if (!(await hasCloudPermission(dir))) return;
+  summaryDirHandle = dir;
+  summaryLocationLabel = dir.name || "汇总文件夹";
+  await saveSummaryFolders();
+  renderSummaryFolders();
+}
+async function syncSummaryFolder() {
+  if (!summaryDirHandle) return alert("请先选择汇总文件夹。");
+  if (!sourceDirHandles.length) return alert("请先添加至少一个来源文件夹。");
+  let merged = normalize(data);
+  let count = 0;
+  for (const dir of sourceDirHandles) {
+    try {
+      merged = mergeSummaryData(merged, await readDirectoryReport(dir));
+      count += 1;
+    } catch (error) {
+      console.warn(error);
+    }
+  }
+  merged.updated_at = new Date().toISOString();
+  await writeDirectoryReport(summaryDirHandle, merged);
+  data = normalize(merged);
+  persistLocal();
+  loadForm();
+  render();
+  setSyncStatus(`已汇总 ${count} 个来源 · ${new Date().toLocaleTimeString("zh-CN")}`, summaryLocationLabel || cloudLocationLabel);
+  showDialog("汇总完成", `已经把 ${count} 个来源文件夹同步到汇总文件夹。`, "");
+}
+async function clearSourceFolders() {
+  if (!confirm("确定清空来源文件夹列表？不会删除任何云端数据。")) return;
+  sourceDirHandles = [];
+  sourceDirLabels = [];
+  await saveSummaryFolders();
+  renderSummaryFolders();
 }
 function exportData() {
   saveFormSilently();
@@ -1566,14 +1773,15 @@ function bindEvents() {
   };
   $("entryText").oninput = preview;
   $("statusSelect").onchange = saveFormSilently;
-  $("reasonText").onchange = saveFormSilently;
-  $("harvestText").onchange = saveFormSilently;
-  $("diaryText").onchange = saveFormSilently;
+  $("reasonText").oninput = scheduleDraftSave;
+  $("harvestText").oninput = scheduleDraftSave;
+  $("diaryText").oninput = scheduleDraftSave;
   $("saveBtn").onclick = () => activeView === "admin" ? saveAdminConfig() : saveAndAudit();
   $("adminSaveBtn").onclick = saveAdminConfig;
   $("autoAuditToggle").onchange = () => { collectAdminSettings(); scheduleSave("admin"); };
   $("sheetBackupToggle").onchange = () => { collectAdminSettings(); scheduleSave("admin"); };
   $("backupCleanupToggle").onchange = () => { collectAdminSettings(); scheduleSave("admin"); };
+  $("checkinOptionsInput").onchange = () => { collectAdminSettings(); renderCheckins(currentRecord().checkins || {}); renderOverview(); scheduleSave("admin"); };
   $("passMessagesInput").onchange = () => { collectAdminSettings(); scheduleSave("admin"); };
   $("failMessagesInput").onchange = () => { collectAdminSettings(); scheduleSave("admin"); };
   ["analysisScope", "analysisGroup", "analysisMember", "analysisRange", "analysisCustomDays", "analysisCompare", "rangeStart", "rangeEnd"].forEach((id) => {
@@ -1625,6 +1833,14 @@ function bindEvents() {
   $("addGroupBtn").onclick = () => addGroup($("groupNameInput").value.trim());
   $("compactToggle").onchange = () => $("app").classList.toggle("compact", $("compactToggle").checked);
   $("openFileBtn").onclick = () => chooseSharedFile().catch((err) => alert(`打开失败：${err.message}`));
+  $("sidebarToggle").onclick = () => {
+    $("app").classList.toggle("sidebar-collapsed");
+    $("sidebarToggle").textContent = $("app").classList.contains("sidebar-collapsed") ? "›" : "‹";
+  };
+  $("addSourceFolderBtn").onclick = () => addSourceFolder().catch((err) => alert(`添加来源失败：${err.message}`));
+  $("clearSourceFoldersBtn").onclick = () => clearSourceFolders();
+  $("chooseSummaryFolderBtn").onclick = () => chooseSummaryFolder().catch((err) => alert(`选择汇总失败：${err.message}`));
+  $("syncSummaryFolderBtn").onclick = () => syncSummaryFolder().catch((err) => alert(`汇总失败：${err.message}`));
   $("exportBtn").onclick = exportData;
   $("backupBtn").onclick = () => setView("admin");
   $("sheetBackupBtn").onclick = backupSheets;

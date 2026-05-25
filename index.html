@@ -40,6 +40,7 @@
 
     <section class="workspace">
       <aside class="sidebar">
+        <button class="sidebar-toggle" id="sidebarToggle" title="展开/收起成员">‹</button>
         <div class="side-title">分组成员</div>
         <div class="members" id="memberList"></div>
         <input class="hidden" id="memberName" placeholder="新增成员">
@@ -92,6 +93,10 @@
                 <textarea id="diaryText" placeholder="当天过程、问题、灵感和复盘。"></textarea>
               </div>
             </div>
+          </section>
+          <section class="panel checkin-panel">
+            <div class="panel-head"><h2>早中晚打卡</h2><span class="hint">自动保存草稿</span></div>
+            <div class="checkin-grid" id="checkinInputs"></div>
           </section>
         </section>
 
@@ -245,6 +250,7 @@
               <label class="switch-light"><input id="backupCleanupToggle" type="checkbox"> 自动清理小备份，保留周/月重要备份</label>
             </div>
             <div class="message-grid">
+              <label>早中晚打卡选项<textarea id="checkinOptionsInput"></textarea></label>
               <label>达标随机文案<textarea id="passMessagesInput"></textarea></label>
               <label>不达标随机文案<textarea id="failMessagesInput"></textarea></label>
             </div>
@@ -252,6 +258,13 @@
           <section class="panel">
             <div class="panel-head"><h2>同步与备份</h2><span class="hint" id="adminSaveStatus">本地自动保留 90 天</span></div>
             <div class="sync-status-grid" id="syncStatusBox"></div>
+            <div class="summary-folder-actions">
+              <button id="addSourceFolderBtn">添加来源文件夹</button>
+              <button id="clearSourceFoldersBtn">清空来源</button>
+              <button id="chooseSummaryFolderBtn">选择汇总文件夹</button>
+              <button class="primary" id="syncSummaryFolderBtn">同步到汇总</button>
+            </div>
+            <div class="summary-folder-box" id="summaryFolderBox"></div>
             <div class="backup-list" id="backupList"></div>
           </section>
         </section>
