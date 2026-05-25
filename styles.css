@@ -194,6 +194,10 @@ tr:last-child td { border-bottom: 0; }
 .person-card.fail .progress span { background: var(--red); }
 .backup-list { display: grid; gap: 8px; }
 .backup-item { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcf8; }
+.sync-status-grid { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 8px; }
+.sync-status-grid div { min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: #fbfcf8; padding: 9px 10px; }
+.sync-status-grid span { display: block; color: var(--muted); font-size: 12px; font-weight: 900; margin-bottom: 4px; }
+.sync-status-grid strong { display: block; font-size: 13px; overflow-wrap: anywhere; }
 .inline-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .analysis-controls { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 8px; }
 .date-controls { display: grid; grid-template-columns: repeat(2, minmax(160px, 1fr)); gap: 8px; }
@@ -250,11 +254,13 @@ tr:last-child td { border-bottom: 0; }
   .grid-2, .admin-grid { grid-template-columns: 1fr; }
   .overview-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .analysis-controls, .analysis-summary, .date-controls, .message-grid, .viz-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sync-status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .brand small { max-width: 86vw; }
 }
 @media (max-width: 580px) {
   .cards, .overview-stats { grid-template-columns: 1fr; }
   .analysis-controls, .analysis-summary, .date-controls, .message-grid, .viz-grid { grid-template-columns: 1fr; }
+  .sync-status-grid { grid-template-columns: 1fr; }
   .member-group-row { grid-template-columns: 1fr 1fr; }
   .form-grid { grid-template-columns: 1fr; }
   .main { padding: 12px; }

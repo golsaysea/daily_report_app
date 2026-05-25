@@ -27,6 +27,11 @@ let currentDate = dateKeyFromDate(new Date());
 let fileHandle = null;
 let cloudDirHandle = null;
 let lastFileModified = 0;
+let lastCloudText = "";
+let cloudLocationLabel = "";
+let syncStatusText = "未连接云端文件夹";
+let syncPollTimer = 0;
+let pollInProgress = false;
 let pendingDialogField = "";
 let activeView = "entry";
 let saveTimer = 0;
@@ -37,6 +42,7 @@ const $ = (id) => document.getElementById(id);
 const fmt = (n) => Number(n || 0).toLocaleString("zh-CN", { maximumFractionDigits: 3 });
 const recordKey = () => `${currentDate}|${currentMember}`;
 const desktopApp = window.desktopApp || null;
+const syncPollMs = 3000;
 function todayLocalKey() {
   const now = new Date();
   return dateKeyFromDate(now);
@@ -126,6 +132,7 @@ function persistLocal() {
   data.updated_at = new Date().toISOString();
   localStorage.setItem("dailyReportData", JSON.stringify(data));
   pruneBackups();
+  renderSyncPanel();
 }
 function newerRecord(a, b) {
   if (!a) return b;
@@ -212,20 +219,24 @@ async function persistEverywhere(mode = "records") {
     const result = await desktopApp.writeCloudData(data);
     if (result?.path) {
       lastFileModified = result.mtime || lastFileModified;
-      $("syncLabel").textContent = `软件同步：${result.path}`;
+      cloudLocationLabel = result.path;
+      lastCloudText = JSON.stringify(data, null, 2);
+      setSyncStatus(`已写入云端 · ${new Date().toLocaleTimeString("zh-CN")}`, result.path);
     }
     return;
   }
   if (!fileHandle) return;
   try {
+    const nextText = JSON.stringify(data, null, 2);
     const writable = await fileHandle.createWritable();
-    await writable.write(JSON.stringify(data, null, 2));
+    await writable.write(nextText);
     await writable.close();
     const file = await fileHandle.getFile();
     lastFileModified = file.lastModified;
-    $("syncLabel").textContent = `共享文件：${file.name}`;
+    lastCloudText = nextText;
+    setSyncStatus(`已写入云端 · ${new Date().toLocaleTimeString("zh-CN")}`);
   } catch {
-    $("syncLabel").textContent = "共享文件写入失败，已保存到本地浏览器";
+    setSyncStatus("写入失败，已保存到本地缓存");
   }
 }
 function openCloudDb() {
@@ -263,22 +274,28 @@ async function hasCloudPermission(dir) {
   return (await dir.requestPermission?.(options)) === "granted";
 }
 async function useCloudDirectory(dir, shouldSave = true) {
-  if (!(await hasCloudPermission(dir))) return false;
+  if (!(await hasCloudPermission(dir))) {
+    setSyncStatus("未获得云端文件夹权限，请重新选择");
+    return false;
+  }
   cloudDirHandle = dir;
   const handle = await dir.getFileHandle("report_data.json", { create: true });
   fileHandle = handle;
   const file = await handle.getFile();
   lastFileModified = file.lastModified;
   const text = await file.text();
+  lastCloudText = text;
+  cloudLocationLabel = `${dir.name}\\report_data.json`;
   createBackup("连接云端文件夹前备份");
   if (text.trim()) data = normalize(JSON.parse(text));
   persistLocal();
-  $("syncLabel").textContent = `云端文件夹：${dir.name}\\report_data.json`;
+  setSyncStatus(`已挂载，后台刷新中 · ${new Date().toLocaleTimeString("zh-CN")}`, cloudLocationLabel);
   if (!data.members.includes(currentMember)) currentMember = data.members[0];
   loadForm();
   render();
   if (!text.trim()) await persistEverywhere();
   if (shouldSave) await saveCloudDirectory(dir);
+  startCloudPolling();
   return true;
 }
 async function restoreCloudDirectory() {
@@ -287,20 +304,46 @@ async function restoreCloudDirectory() {
     if (!result || result.error) return;
     if (result.text?.trim()) data = normalize(JSON.parse(result.text));
     lastFileModified = result.mtime || 0;
-    $("syncLabel").textContent = `软件同步：${result.path}`;
+    lastCloudText = result.text || "";
+    cloudLocationLabel = result.path || "";
+    setSyncStatus(`已恢复挂载，后台刷新中 · ${new Date().toLocaleTimeString("zh-CN")}`, cloudLocationLabel);
     if (!data.members.includes(currentMember)) currentMember = data.members[0];
     persistLocal();
     loadForm();
     render();
+    startCloudPolling();
     return;
   }
   if (!("showDirectoryPicker" in window) || !("indexedDB" in window)) return;
   const dir = await loadCloudDirectory();
   if (dir) await useCloudDirectory(dir, false);
+  else setSyncStatus("未选择云端文件夹，正在使用本地缓存");
 }
 function scheduleSave(mode = "records") {
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => persistEverywhere(mode), 180);
+}
+function setSyncStatus(message, location = cloudLocationLabel) {
+  syncStatusText = message || syncStatusText;
+  cloudLocationLabel = location || cloudLocationLabel;
+  if ($("syncLabel")) $("syncLabel").textContent = cloudLocationLabel ? `${syncStatusText}：${cloudLocationLabel}` : syncStatusText;
+  renderSyncPanel();
+}
+function renderSyncPanel() {
+  const box = $("syncStatusBox");
+  if (!box) return;
+  const cachedAt = data.updated_at ? new Date(data.updated_at).toLocaleString("zh-CN") : "暂无";
+  const recordCount = Object.keys(data.records || {}).length;
+  box.innerHTML = `
+    <div><span>云端挂载</span><strong>${escapeHtml(cloudLocationLabel || "未选择")}</strong></div>
+    <div><span>后台刷新</span><strong>${escapeHtml(syncStatusText)}</strong></div>
+    <div><span>本地缓存</span><strong>${recordCount} 条 · ${escapeHtml(cachedAt)}</strong></div>
+    <div><span>刷新频率</span><strong>${fileHandle || desktopApp?.isDesktop ? `${syncPollMs / 1000} 秒` : "未启动"}</strong></div>
+  `;
+}
+function startCloudPolling() {
+  window.clearInterval(syncPollTimer);
+  syncPollTimer = window.setInterval(() => pollSharedFile(false), syncPollMs);
 }
 function dailyQuotaEntry(day = currentDate) {
   if (!data.dailyQuotas || typeof data.dailyQuotas !== "object") data.dailyQuotas = {};
@@ -1154,6 +1197,7 @@ function render() {
   renderHistory();
   renderBackups();
   renderAdminSettings();
+  renderSyncPanel();
   $("quotaInput").value = String(data.quota);
   preview();
 }
@@ -1202,11 +1246,14 @@ async function chooseSharedFile() {
     createBackup("切换云端文件夹前备份");
     if (result.text?.trim()) data = normalize(JSON.parse(result.text));
     lastFileModified = result.mtime || 0;
-    $("syncLabel").textContent = `软件同步：${result.path}`;
+    lastCloudText = result.text || "";
+    cloudLocationLabel = result.path || "";
+    setSyncStatus(`已挂载，后台刷新中 · ${new Date().toLocaleTimeString("zh-CN")}`, cloudLocationLabel);
     if (!data.members.includes(currentMember)) currentMember = data.members[0];
     persistLocal();
     loadForm();
     render();
+    startCloudPolling();
     return;
   }
   if ("showDirectoryPicker" in window) {
@@ -1234,45 +1281,67 @@ async function chooseSharedFile() {
   const file = await handle.getFile();
   lastFileModified = file.lastModified;
   const text = await file.text();
+  lastCloudText = text;
+  cloudLocationLabel = file.name;
   createBackup(createNew ? "新建云端文件前备份" : "切换云端文件前备份");
   if (text.trim()) data = normalize(JSON.parse(text));
   persistLocal();
-  $("syncLabel").textContent = `共享文件：${file.name}`;
+  setSyncStatus(`已挂载文件，后台刷新中 · ${new Date().toLocaleTimeString("zh-CN")}`, cloudLocationLabel);
   if (!data.members.includes(currentMember)) currentMember = data.members[0];
   loadForm();
   render();
   if (!text.trim() || createNew) await persistEverywhere();
+  startCloudPolling();
 }
-async function pollSharedFile() {
+async function pollSharedFile(showIdle = true) {
+  if (pollInProgress) return;
+  pollInProgress = true;
   if (desktopApp?.isDesktop) {
-    const result = await desktopApp.pollCloudData();
-    if (!result || result.unchanged) return;
+    const result = await desktopApp.pollCloudData().catch((error) => ({ error: error.message }));
+    pollInProgress = false;
+    if (!result) return;
+    if (result.unchanged) {
+      if (showIdle) setSyncStatus(`后台已检查 · ${new Date().toLocaleTimeString("zh-CN")}`);
+      return;
+    }
     if (result.error) {
-      $("syncLabel").textContent = `软件同步暂时不可读：${result.error}`;
+      setSyncStatus(`同步暂时不可读：${result.error}`);
       return;
     }
     createBackup("云端刷新前备份");
     data = normalize(JSON.parse(result.text || "{}"));
     lastFileModified = result.mtime || lastFileModified;
-    $("syncLabel").textContent = `软件同步：${result.path}`;
+    lastCloudText = result.text || "";
+    setSyncStatus(`发现云端更新，已刷新 · ${new Date().toLocaleTimeString("zh-CN")}`, result.path || cloudLocationLabel);
     if (!data.members.includes(currentMember)) currentMember = data.members[0];
     loadForm();
     render();
     return;
   }
-  if (!fileHandle) return;
+  if (!fileHandle) {
+    pollInProgress = false;
+    return;
+  }
   try {
     const file = await fileHandle.getFile();
-    if (file.lastModified && file.lastModified !== lastFileModified) {
+    const text = await file.text();
+    if (text !== lastCloudText) {
       lastFileModified = file.lastModified;
+      lastCloudText = text;
       createBackup("云端刷新前备份");
-      data = normalize(JSON.parse(await file.text()));
+      data = mergeCloudData(JSON.parse(text || "{}"), data, "records");
+      persistLocal();
       if (!data.members.includes(currentMember)) currentMember = data.members[0];
+      setSyncStatus(`发现云端更新，已刷新 · ${new Date().toLocaleTimeString("zh-CN")}`);
       loadForm();
       render();
+    } else if (showIdle) {
+      setSyncStatus(`后台已检查 · ${new Date().toLocaleTimeString("zh-CN")}`);
     }
-  } catch {
-    $("syncLabel").textContent = "共享文件暂时不可读，继续使用本地副本";
+  } catch (error) {
+    setSyncStatus(`共享文件暂时不可读，继续使用本地缓存`);
+  } finally {
+    pollInProgress = false;
   }
 }
 function exportData() {
@@ -1590,4 +1659,8 @@ loadForm();
 render();
 setView(activeView);
 restoreCloudDirectory();
-window.setInterval(pollSharedFile, 1800);
+startCloudPolling();
+window.addEventListener("focus", () => pollSharedFile(true));
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) pollSharedFile(true);
+});
