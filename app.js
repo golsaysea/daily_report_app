@@ -237,6 +237,59 @@ function mergeSummaryData(baseSource, sourceData) {
   });
   return normalize(merged);
 }
+function makeEmptySummary(seed = data) {
+  const empty = normalize(seed);
+  empty.members = [];
+  empty.groups = [];
+  empty.memberGroups = {};
+  empty.groupItems = {};
+  empty.memberItems = {};
+  empty.memberQuotas = {};
+  empty.dailyQuotas = {};
+  empty.records = {};
+  return empty;
+}
+function scopedSourceData(sourceData, label, existingMembers = new Set()) {
+  const source = normalize(sourceData);
+  const scoped = makeEmptySummary(source);
+  const groupMap = {};
+  const memberMap = {};
+  const sourceLabel = String(label || "来源").trim() || "来源";
+  source.groups.forEach((group) => {
+    const nextGroup = `${sourceLabel} / ${group}`;
+    groupMap[group] = nextGroup;
+    scoped.groups.push(nextGroup);
+    scoped.groupItems[nextGroup] = clone(source.groupItems?.[group] || Object.keys(source.rules || {}));
+  });
+  source.members.forEach((member) => {
+    let nextMember = member;
+    if (existingMembers.has(nextMember) || memberMap[nextMember]) nextMember = `${member}（${sourceLabel}）`;
+    let suffix = 2;
+    while (existingMembers.has(nextMember) || memberMap[nextMember]) {
+      nextMember = `${member}（${sourceLabel} ${suffix}）`;
+      suffix += 1;
+    }
+    memberMap[member] = nextMember;
+    existingMembers.add(nextMember);
+    scoped.members.push(nextMember);
+    const sourceGroup = source.memberGroups?.[member] || source.groups[0] || "未分组";
+    scoped.memberGroups[nextMember] = groupMap[sourceGroup] || `${sourceLabel} / ${sourceGroup}`;
+    if (source.memberItems?.[member]) scoped.memberItems[nextMember] = clone(source.memberItems[member]);
+    if (source.memberQuotas?.[member] !== undefined) scoped.memberQuotas[nextMember] = source.memberQuotas[member];
+  });
+  Object.entries(source.dailyQuotas || {}).forEach(([day, entry]) => {
+    scoped.dailyQuotas[day] = { default: entry.default ?? "", members: {} };
+    Object.entries(entry.members || {}).forEach(([member, quota]) => {
+      if (memberMap[member]) scoped.dailyQuotas[day].members[memberMap[member]] = quota;
+    });
+  });
+  Object.values(source.records || {}).forEach((record) => {
+    const nextMember = memberMap[record.member] || record.member;
+    const nextRecord = { ...clone(record), member: nextMember };
+    scoped.records[`${nextRecord.date}|${nextMember}`] = nextRecord;
+  });
+  return normalize(scoped);
+}
 async function readRemoteData() {
   if (desktopApp?.isDesktop) {
     const result = await desktopApp.getCloudData();
@@ -263,9 +316,12 @@ async function persistEverywhere(mode = "records") {
       lastCloudText = JSON.stringify(data, null, 2);
       setSyncStatus(`已写入云端 · ${new Date().toLocaleTimeString("zh-CN")}`, result.path);
     }
-    return;
+    return { written: true };
   }
-  if (!fileHandle) return;
+  if (!fileHandle) {
+    setSyncStatus("未选择云端文件夹，只保存了本地草稿");
+    return { written: false, reason: "missing-cloud-folder" };
+  }
   try {
     const nextText = JSON.stringify(data, null, 2);
     const writable = await fileHandle.createWritable();
@@ -275,8 +331,10 @@ async function persistEverywhere(mode = "records") {
     lastFileModified = file.lastModified;
     lastCloudText = nextText;
     setSyncStatus(`已写入云端 · ${new Date().toLocaleTimeString("zh-CN")}`);
+    return { written: true };
   } catch {
     setSyncStatus("写入失败，已保存到本地缓存");
+    return { written: false, reason: "write-failed" };
   }
 }
 function openCloudDb() {
@@ -435,8 +493,10 @@ function selectedReportLabel() {
 }
 function buildMergedSourceDataset() {
   let merged = normalize(data);
+  const existingMembers = new Set(merged.members || []);
   sourceDatasets.forEach((source) => {
-    merged = mergeSummaryData(merged, source.data);
+    if (source.error) return;
+    merged = mergeSummaryData(merged, scopedSourceData(source.data, source.label, existingMembers));
   });
   mergedSourceDataset = normalize(merged);
   return mergedSourceDataset;
@@ -471,11 +531,12 @@ function renderSyncPanel() {
   if (!box) return;
   const cachedAt = data.updated_at ? new Date(data.updated_at).toLocaleString("zh-CN") : "暂无";
   const recordCount = Object.keys(data.records || {}).length;
+  const connected = Boolean(fileHandle || desktopApp?.isDesktop);
   box.innerHTML = `
     <div><span>云端挂载</span><strong>${escapeHtml(cloudLocationLabel || "未选择")}</strong></div>
     <div><span>后台刷新</span><strong>${escapeHtml(syncStatusText)}</strong></div>
-    <div><span>本地缓存</span><strong>${recordCount} 条 · ${escapeHtml(cachedAt)}</strong></div>
-    <div><span>刷新频率</span><strong>${fileHandle || desktopApp?.isDesktop ? `${syncPollMs / 1000} 秒` : "未启动"}</strong></div>
+    <div><span>本地草稿</span><strong>${recordCount} 条 · ${escapeHtml(cachedAt)}</strong></div>
+    <div><span>同步状态</span><strong>${connected ? `${syncPollMs / 1000} 秒刷新` : "未连接时不会进入团队总数据"}</strong></div>
   `;
 }
 function renderSummaryFolders() {
@@ -503,6 +564,10 @@ function renderSummaryFolders() {
     <div class="summary-folder-line">
       <span>高级管理员</span>
       <strong>${superAdminUnlocked ? `已开启 · 当前查看 ${escapeHtml(selectedReportLabel())}` : "未提升"}</strong>
+    </div>
+    <div class="summary-folder-line">
+      <span>汇总提醒</span>
+      <strong>总文件夹不会自动收到成员提交；高级管理员需要刷新来源数据并点击“同步到汇总”。</strong>
     </div>
     <div class="summary-source-grid">${sourceStats || `<div class="hint">提升高级管理员权限后，可加载并切换多个来源文件夹的数据。</div>`}</div>
   `;
@@ -838,10 +903,12 @@ function pickReviewMessage(type) {
 async function saveAndAudit() {
   createBackup("保存前备份");
   const { rec, autoStatus } = saveFormSilently();
-  await persistEverywhere("records");
+  const result = await persistEverywhere("records");
   if (data.sheetBackupEnabled !== false) await backupSheets(true);
   render();
-  if (!data.autoAudit) {
+  if (!result?.written) {
+    showDialog("未同步到总数据", "这次只保存到了本机浏览器缓存。请先点击顶部“云端文件夹”，选择团队共享的 Google Drive 同步文件夹，再重新提交。", "");
+  } else if (!data.autoAudit) {
     showDialog("已提交", "记录已同步云端，等待管理员审核。", "");
   } else if (autoStatus === "不达标") {
     showDialog(pickReviewMessage("fail"), "记录已提交云端。还没有达到定额，可以写一下原因或补救计划。", rec.reason ? "" : "reason");
@@ -1707,10 +1774,12 @@ async function syncSummaryFolder() {
   if (!summaryDirHandle) return alert("请先选择汇总文件夹。");
   if (!sourceDirHandles.length) return alert("请先添加至少一个来源文件夹。");
   let merged = normalize(data);
+  const existingMembers = new Set(merged.members || []);
   let count = 0;
   for (const dir of sourceDirHandles) {
     try {
-      merged = mergeSummaryData(merged, await readDirectoryReport(dir));
+      const label = dir.name || `来源 ${count + 1}`;
+      merged = mergeSummaryData(merged, scopedSourceData(await readDirectoryReport(dir), label, existingMembers));
       count += 1;
     } catch (error) {
       console.warn(error);
@@ -1719,12 +1788,10 @@ async function syncSummaryFolder() {
   merged.updated_at = new Date().toISOString();
   await writeDirectoryReport(summaryDirHandle, merged);
   mergedSourceDataset = normalize(merged);
-  data = normalize(merged);
-  persistLocal();
-  loadForm();
-  render();
+  if (superAdminUnlocked) activeReportSource = "all";
+  await refreshSourceDatasets();
   setSyncStatus(`已汇总 ${count} 个来源 · ${new Date().toLocaleTimeString("zh-CN")}`, summaryLocationLabel || cloudLocationLabel);
-  showDialog("汇总完成", `已经把 ${count} 个来源文件夹同步到汇总文件夹。`, "");
+  showDialog("汇总完成", `已经把 ${count} 个来源文件夹写入汇总文件夹。当前组文件夹数据没有被替换。`, "");
 }
 async function clearSourceFolders() {
   if (!confirm("确定清空来源文件夹列表？不会删除任何云端数据。")) return;
@@ -1907,8 +1974,13 @@ async function saveAdminConfig() {
   collectAdminSettings();
   createBackup("保存配置前备份");
   persistLocal();
-  await persistEverywhere("admin");
+  const result = await persistEverywhere("admin");
   render();
+  if (!result?.written) {
+    $("adminSaveStatus").textContent = `配置只保存为本地草稿 · ${new Date().toLocaleString("zh-CN")}`;
+    showDialog("配置未同步", "请先选择团队共享的云端文件夹。未连接云端时，配置只会留在本机浏览器缓存里。", "");
+    return;
+  }
   $("adminSaveStatus").textContent = `配置已保存并同步 · ${new Date().toLocaleString("zh-CN")}`;
   showDialog("配置已保存", "项目、定额和成员名单已经写入共享数据。其他成员同步后会自动更新。", "");
 }
