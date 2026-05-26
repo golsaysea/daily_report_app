@@ -79,7 +79,10 @@ async function readJson(req) {
 }
 
 function database() {
-  const url = process.env.DATABASE_URL;
+  const url = process.env.DATABASE_URL
+    || process.env.POSTGRES_URL
+    || process.env.POSTGRES_PRISMA_URL
+    || process.env.POSTGRES_URL_NON_POOLING;
   if (!url) return null;
   return neon(url);
 }
@@ -222,13 +225,13 @@ module.exports = async function handler(req, res) {
     if (req.method === "GET") {
       return send(res, 200, {
         ok: true,
-        configured: Boolean(process.env.DATABASE_URL),
+        configured: Boolean(database()),
         protected: Boolean(backupToken())
       });
     }
     if (req.method !== "POST") return send(res, 405, { ok: false, error: "Method Not Allowed" });
     const sql = database();
-    if (!sql) return send(res, 503, { ok: false, error: "Vercel 还没有配置 DATABASE_URL。" });
+    if (!sql) return send(res, 503, { ok: false, error: "Vercel 还没有配置 DATABASE_URL 或 POSTGRES_URL。" });
     if (!backupToken()) return send(res, 503, { ok: false, error: "Vercel 还没有配置 CLOUD_BACKUP_TOKEN。" });
     if (!hasValidToken(req)) return send(res, 401, { ok: false, error: "云备份口令不正确。" });
 

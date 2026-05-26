@@ -5,7 +5,7 @@
 ## 当前部署形态
 
 - Vercel 部署网页代码、团队实时云同步 API 和可选云备份 API。
-- 配置 `DATABASE_URL` 和 `TEAM_SYNC_TOKEN` 后，成员提交优先写入 Vercel Postgres。
+- 配置 `POSTGRES_URL` 或 `DATABASE_URL`，再配置 `TEAM_SYNC_TOKEN` 后，成员提交优先写入 Vercel Postgres。
 - Google Drive 本地同步文件夹仍可作为备用同步、导出和二次汇总通道。
 - 未配置云数据库且未选择共享文件夹时，提交只会留在浏览器本地草稿。
 - 配置 `CLOUD_BACKUP_TOKEN` 后，管理员可把当前数据视图额外备份到 Postgres 快照表。
@@ -21,11 +21,11 @@
 - `.github/workflows/release.yml` 在 tag `v*` 上打包 Release zip，并使用 `actions/attest-build-provenance@v2` 生成安全构建证明。
 - 高级管理员汇总功能只读取用户显式选择的来源文件夹和汇总文件夹，不会扫描任意本地目录。
 - 未选择云端文件夹时，提交不会再提示“已同步云端”，避免本地草稿被误认为团队数据。
-- 团队实时云同步 API 使用 `DATABASE_URL` 连接数据库，使用 `TEAM_SYNC_TOKEN` 或 `APP_PASSWORD` 做服务端口令校验。
+- 团队实时云同步 API 使用 `POSTGRES_URL` 或 `DATABASE_URL` 连接数据库，使用 `TEAM_SYNC_TOKEN` 或 `APP_PASSWORD` 做服务端口令校验。
 - 成员登录密码只保存在当前页面内存里，用于本次页面打开期间向 Vercel API 写入数据。
 - 团队实时云同步和云备份接口都使用参数化 SQL 写入 JSONB，避免拼接 SQL。
 - 团队实时云同步接口对响应设置 `no-store`，并限制单次请求体 8MB。
-- 云数据库备份 API 使用 `DATABASE_URL` 连接数据库，使用 `CLOUD_BACKUP_TOKEN` 做服务端口令校验；口令不写入仓库，不持久化到浏览器。
+- 云数据库备份 API 使用 `POSTGRES_URL` 或 `DATABASE_URL` 连接数据库，使用 `CLOUD_BACKUP_TOKEN` 做服务端口令校验；口令不写入仓库，不持久化到浏览器。
 - 云备份接口对响应设置 `no-store`，并限制单次请求体 8MB。
 
 ## GitHub 预检结果
