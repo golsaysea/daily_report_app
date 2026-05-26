@@ -29,11 +29,6 @@
       </nav>
       <div class="actions">
         <label class="switch"><input type="checkbox" id="compactToggle"> 小巧</label>
-        <button id="openFileBtn" title="选择 Google Drive 本地同步文件夹">云端文件夹</button>
-        <button id="backupBtn" title="查看本地备份">备份</button>
-        <button id="sheetBackupBtn" title="生成可用 Google 表格打开的 CSV 备份">表格备份</button>
-        <button id="exportBtn" title="导出当前数据">导出</button>
-        <button id="importBtn" title="导入 JSON">导入</button>
         <button class="primary" id="saveBtn">提交</button>
       </div>
     </header>
@@ -265,6 +260,11 @@
             <div class="panel-head"><h2>同步与备份</h2><span class="hint" id="adminSaveStatus">本地自动保留 90 天</span></div>
             <div class="sync-status-grid" id="syncStatusBox"></div>
             <div class="summary-folder-actions">
+              <button id="openFileBtn" title="选择 Google Drive 本地同步文件夹">选择备用文件夹</button>
+              <button id="sheetBackupBtn" title="生成可用 Google 表格打开的 CSV 备份">表格备份</button>
+              <button id="exportBtn" title="导出当前数据">导出</button>
+              <button id="importBtn" title="导入 JSON">导入</button>
+              <button id="backupBtn" title="查看本地备份">本地备份</button>
               <button class="primary" id="elevateSuperAdminBtn">提升高级管理员权限</button>
               <button id="refreshSourceFoldersBtn">刷新来源数据</button>
               <button id="addSourceFolderBtn">添加来源文件夹</button>
