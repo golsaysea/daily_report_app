@@ -33,6 +33,7 @@ let cloudLocationLabel = "";
 let syncStatusText = "未连接云端文件夹";
 let cloudDbStatusText = "未连接 Vercel 云数据库";
 let cloudDbLastMeta = null;
+let cloudHistoryEvents = [];
 let cloudDbPollTimer = 0;
 let appSessionPassword = "";
 let cloudBackupStatusText = "未检查云数据库";
@@ -665,7 +666,7 @@ async function saveCloudDatabaseData(mode = "records", silent = false) {
     return { written: false, reason: "missing-token" };
   }
   try {
-    const result = await callCloudData("save", { data: normalize(data), mode }, appSessionPassword);
+    const result = await callCloudData("save", { data: normalize(data), mode, actor: currentMember }, appSessionPassword);
     if (result.data) {
       data = normalize(result.data);
       persistLocal();
@@ -684,6 +685,41 @@ function startCloudDbPolling() {
   cloudDbPollTimer = window.setInterval(() => {
     pullCloudDatabaseData({ silent: true }).catch(() => {});
   }, 12000);
+}
+function renderCloudHistoryPanel() {
+  const select = $("cloudHistorySelect");
+  if (!select) return;
+  const previous = select.value;
+  select.innerHTML = `<option value="">选择云端历史版本</option>` + cloudHistoryEvents.map((item) => {
+    const createdAt = item.created_at ? new Date(item.created_at).toLocaleString("zh-CN") : "未知时间";
+    const actor = item.actor ? ` · ${item.actor}` : "";
+    return `<option value="${escapeAttr(item.id)}">${escapeHtml(createdAt + actor)} · ${Number(item.record_count || 0)} 条</option>`;
+  }).join("");
+  if ([...select.options].some((option) => option.value === previous)) select.value = previous;
+}
+async function refreshCloudHistory(silent = false) {
+  try {
+    const result = await callCloudData("history");
+    cloudHistoryEvents = result.events || [];
+    renderCloudHistoryPanel();
+    if (!silent) showDialog("云端历史已刷新", `已读取最近 ${cloudHistoryEvents.length} 个云端历史版本。`, "");
+  } catch (error) {
+    if (!silent) alert(`读取云端历史失败：${error.message}`);
+  }
+}
+async function restoreCloudHistory() {
+  const eventId = $("cloudHistorySelect")?.value || "";
+  if (!eventId) return alert("请先选择一个云端历史版本。");
+  if (!confirm("确定恢复到这个云端历史版本？当前数据会先保留本地备份。")) return;
+  createBackup("云端历史恢复前备份");
+  const result = await callCloudData("restore_history", { eventId });
+  data = normalize(result.data);
+  persistLocal();
+  if (!data.members.includes(currentMember)) currentMember = data.members[0] || currentMember;
+  loadForm();
+  render();
+  await refreshCloudHistory(true);
+  showDialog("云端历史已恢复", "已经把团队数据恢复到选中的历史版本，并写回 Vercel 云库。", "");
 }
 function cloudBackupAvailable() {
   return window.location.protocol !== "file:" && typeof fetch === "function";
@@ -1806,6 +1842,7 @@ function render() {
   renderAdminSettings();
   renderSyncPanel();
   renderCloudBackupPanel();
+  renderCloudHistoryPanel();
   renderSummaryFolders();
   renderReportSourceTabs();
   $("quotaInput").value = String(data.quota);
@@ -1858,6 +1895,7 @@ async function unlockApp() {
   $("lockScreen").classList.add("hidden");
   $("appPasswordInput").value = "";
   await pullCloudDatabaseData({ silent: true });
+  await refreshCloudHistory(true).catch(() => {});
   startCloudDbPolling();
   loadForm();
   render();
@@ -2391,6 +2429,8 @@ function bindEvents() {
   $("cloudBackupTokenInput").onkeydown = (event) => {
     if (event.key === "Enter") refreshCloudBackupStatus(false).catch((err) => alert(`云数据库检查失败：${err.message}`));
   };
+  $("cloudHistoryRefreshBtn").onclick = () => refreshCloudHistory(false);
+  $("cloudHistoryRestoreBtn").onclick = () => restoreCloudHistory().catch((err) => alert(`恢复云端历史失败：${err.message}`));
   $("exportBtn").onclick = exportData;
   $("backupBtn").onclick = () => setView("admin");
   $("sheetBackupBtn").onclick = backupSheets;

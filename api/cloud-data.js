@@ -234,6 +234,21 @@ async function ensureSchema(sql) {
       data JSONB NOT NULL
     )
   `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS daily_report_cloud_events (
+      id TEXT PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      actor TEXT NOT NULL DEFAULT '',
+      mode TEXT NOT NULL DEFAULT 'records',
+      source TEXT NOT NULL DEFAULT 'team-sync',
+      record_count INTEGER NOT NULL DEFAULT 0,
+      member_count INTEGER NOT NULL DEFAULT 0,
+      group_count INTEGER NOT NULL DEFAULT 0,
+      data_sha256 TEXT NOT NULL,
+      data JSONB NOT NULL
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS daily_report_cloud_events_created_at ON daily_report_cloud_events (created_at DESC)`;
   schemaReady = true;
 }
 
@@ -260,12 +275,13 @@ function publicStateMeta(state) {
   };
 }
 
-async function writeState(sql, nextData, source = "team-sync") {
+async function writeState(sql, nextData, source = "team-sync", actor = "", mode = "records") {
   const normalized = normalize(nextData);
   normalized.updated_at = new Date().toISOString();
   const json = JSON.stringify(normalized);
   const sha = digestData(normalized);
   const stats = dataStats(normalized);
+  const eventId = `event_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
   await sql`
     INSERT INTO daily_report_cloud_state
       (id, updated_at, client_updated_at, source, record_count, member_count, group_count, data_sha256, data)
@@ -281,9 +297,16 @@ async function writeState(sql, nextData, source = "team-sync") {
       data_sha256 = EXCLUDED.data_sha256,
       data = EXCLUDED.data
   `;
+  await sql`
+    INSERT INTO daily_report_cloud_events
+      (id, actor, mode, source, record_count, member_count, group_count, data_sha256, data)
+    VALUES
+      (${eventId}, ${String(actor || "").slice(0, 80)}, ${String(mode || "records").slice(0, 30)}, ${source}, ${stats.recordCount}, ${stats.memberCount}, ${stats.groupCount}, ${sha}, ${json}::jsonb)
+  `;
   return {
     data: normalized,
     meta: {
+      event_id: eventId,
       updated_at: new Date().toISOString(),
       client_updated_at: stats.clientUpdatedAt,
       source,
@@ -293,6 +316,47 @@ async function writeState(sql, nextData, source = "team-sync") {
       data_sha256: sha
     }
   };
+}
+
+function publicEvent(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    created_at: row.created_at,
+    actor: row.actor || "",
+    mode: row.mode || "records",
+    source: row.source || "team-sync",
+    record_count: Number(row.record_count || 0),
+    member_count: Number(row.member_count || 0),
+    group_count: Number(row.group_count || 0),
+    data_sha256: row.data_sha256
+  };
+}
+
+async function listEvents(sql) {
+  const rows = await sql`
+    SELECT id, created_at, actor, mode, source, record_count, member_count, group_count, data_sha256
+    FROM daily_report_cloud_events
+    ORDER BY created_at DESC
+    LIMIT 80
+  `;
+  return rows.map(publicEvent);
+}
+
+async function restoreEvent(sql, eventId) {
+  const rows = await sql`
+    SELECT id, created_at, actor, mode, source, record_count, member_count, group_count, data_sha256, data
+    FROM daily_report_cloud_events
+    WHERE id = ${eventId}
+    LIMIT 1
+  `;
+  if (!rows[0]) {
+    const error = new Error("没有找到这个历史版本。");
+    error.statusCode = 404;
+    throw error;
+  }
+  const saved = await writeState(sql, rows[0].data, "history-restore", `恢复:${rows[0].actor || rows[0].id}`, "admin");
+  return { ...saved, restored: publicEvent(rows[0]) };
 }
 
 module.exports = async function handler(req, res) {
@@ -327,12 +391,19 @@ module.exports = async function handler(req, res) {
     if (action === "pull") {
       return send(res, 200, { ok: true, data: state?.data || null, meta: publicStateMeta(state) });
     }
+    if (action === "history") {
+      return send(res, 200, { ok: true, events: await listEvents(sql) });
+    }
+    if (action === "restore_history") {
+      if (!body.eventId) return send(res, 400, { ok: false, error: "缺少历史版本 ID。" });
+      return send(res, 200, { ok: true, ...(await restoreEvent(sql, String(body.eventId))) });
+    }
     if (action === "save") {
       if (!body.data || typeof body.data !== "object" || Array.isArray(body.data)) {
         return send(res, 400, { ok: false, error: "缺少可同步的数据。" });
       }
       const merged = mergeCloudData(state?.data || null, body.data, body.mode === "admin" ? "admin" : "records");
-      const saved = await writeState(sql, merged, body.mode === "admin" ? "admin-sync" : "team-sync");
+      const saved = await writeState(sql, merged, body.mode === "admin" ? "admin-sync" : "team-sync", body.actor || "", body.mode === "admin" ? "admin" : "records");
       return send(res, 200, { ok: true, ...saved });
     }
     return send(res, 400, { ok: false, error: "未知云同步动作。" });
