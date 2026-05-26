@@ -31,6 +31,10 @@ let lastFileModified = 0;
 let lastCloudText = "";
 let cloudLocationLabel = "";
 let syncStatusText = "未连接云端文件夹";
+let cloudDbStatusText = "未连接 Vercel 云数据库";
+let cloudDbLastMeta = null;
+let cloudDbPollTimer = 0;
+let appSessionPassword = "";
 let cloudBackupStatusText = "未检查云数据库";
 let cloudBackupLastMeta = null;
 let cloudBackupBackups = [];
@@ -312,6 +316,7 @@ async function persistEverywhere(mode = "records") {
   const remoteData = await readRemoteData().catch(() => null);
   data = mergeCloudData(remoteData, data, mode);
   persistLocal();
+  const cloudDbResult = await saveCloudDatabaseData(mode, true);
   if (desktopApp?.isDesktop) {
     const result = await desktopApp.writeCloudData(data);
     if (result?.path) {
@@ -320,11 +325,15 @@ async function persistEverywhere(mode = "records") {
       lastCloudText = JSON.stringify(data, null, 2);
       setSyncStatus(`已写入云端 · ${new Date().toLocaleTimeString("zh-CN")}`, result.path);
     }
-    return { written: true };
+    return { written: true, cloudDbWritten: cloudDbResult?.written === true, folderWritten: true };
   }
   if (!fileHandle) {
-    setSyncStatus("未选择云端文件夹，只保存了本地草稿");
-    return { written: false, reason: "missing-cloud-folder" };
+    if (cloudDbResult?.written) {
+      setSyncStatus("已写入 Vercel 云库，未选择文件夹备份");
+      return { written: true, cloudDbWritten: true, folderWritten: false };
+    }
+    setSyncStatus("未选择云端文件夹，也未写入 Vercel 云库，只保存了本地草稿");
+    return { written: false, reason: "missing-cloud-target" };
   }
   try {
     const nextText = JSON.stringify(data, null, 2);
@@ -335,8 +344,12 @@ async function persistEverywhere(mode = "records") {
     lastFileModified = file.lastModified;
     lastCloudText = nextText;
     setSyncStatus(`已写入云端 · ${new Date().toLocaleTimeString("zh-CN")}`);
-    return { written: true };
+    return { written: true, cloudDbWritten: cloudDbResult?.written === true, folderWritten: true };
   } catch {
+    if (cloudDbResult?.written) {
+      setSyncStatus("已写入 Vercel 云库，文件夹备份写入失败");
+      return { written: true, cloudDbWritten: true, folderWritten: false, reason: "folder-write-failed" };
+    }
     setSyncStatus("写入失败，已保存到本地缓存");
     return { written: false, reason: "write-failed" };
   }
@@ -536,12 +549,132 @@ function renderSyncPanel() {
   const cachedAt = data.updated_at ? new Date(data.updated_at).toLocaleString("zh-CN") : "暂无";
   const recordCount = Object.keys(data.records || {}).length;
   const connected = Boolean(fileHandle || desktopApp?.isDesktop);
+  const dbReady = Boolean(appSessionPassword && cloudDatabaseAvailable() && !/未配置|失败|不可用/.test(cloudDbStatusText));
   box.innerHTML = `
     <div><span>云端挂载</span><strong>${escapeHtml(cloudLocationLabel || "未选择")}</strong></div>
     <div><span>后台刷新</span><strong>${escapeHtml(syncStatusText)}</strong></div>
+    <div><span>Vercel 云库</span><strong>${escapeHtml(cloudDbStatusText)}</strong></div>
     <div><span>本地草稿</span><strong>${recordCount} 条 · ${escapeHtml(cachedAt)}</strong></div>
-    <div><span>同步状态</span><strong>${connected ? `${syncPollMs / 1000} 秒刷新` : "未连接时不会进入团队总数据"}</strong></div>
+    <div><span>同步状态</span><strong>${dbReady ? "Vercel 云库主同步" : (connected ? `${syncPollMs / 1000} 秒刷新` : "未连接时不会进入团队总数据")}</strong></div>
   `;
+}
+function cloudDatabaseAvailable() {
+  return window.location.protocol !== "file:" && typeof fetch === "function";
+}
+function cloudDataMetaText(meta) {
+  if (!meta) return "";
+  const updatedAt = meta.updated_at ? new Date(meta.updated_at).toLocaleString("zh-CN") : "未知时间";
+  const count = Number(meta.record_count || 0);
+  return `${count} 条 · ${updatedAt}`;
+}
+function setCloudDbStatus(message, meta) {
+  cloudDbStatusText = message || cloudDbStatusText;
+  if (meta !== undefined) cloudDbLastMeta = meta;
+  renderSyncPanel();
+}
+async function callCloudData(action, payload = {}, token = appSessionPassword) {
+  if (!cloudDatabaseAvailable()) throw new Error("请通过 Vercel 或本地开发服务器打开网页，直接打开本地文件不能使用 Vercel 云同步。");
+  const syncToken = String(token || appSessionPassword || cloudBackupToken || "").trim();
+  if (!syncToken) throw new Error("请先输入应用密码。");
+  const response = await fetch("/api/cloud-data", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Team-Token": syncToken
+    },
+    body: JSON.stringify({ action, ...payload })
+  });
+  const text = await response.text();
+  const result = text ? JSON.parse(text) : {};
+  if (!response.ok || result.ok === false) throw new Error(result.error || `Vercel 云同步失败：${response.status}`);
+  return result;
+}
+async function refreshCloudDatabaseStatus(silent = false) {
+  if (!cloudDatabaseAvailable()) {
+    setCloudDbStatus("本地文件打开不可用");
+    return;
+  }
+  if (!appSessionPassword) {
+    try {
+      const response = await fetch("/api/cloud-data", { cache: "no-store" });
+      const result = await response.json();
+      if (!result.configured) setCloudDbStatus("未配置 DATABASE_URL");
+      else if (!result.protected) setCloudDbStatus("未配置 TEAM_SYNC_TOKEN");
+      else setCloudDbStatus("已配置，登录后自动同步");
+    } catch {
+      setCloudDbStatus("未检测到云同步 API");
+    }
+    return;
+  }
+  try {
+    const result = await callCloudData("pull", {}, appSessionPassword);
+    setCloudDbStatus(result.data ? `已连接 · ${cloudDataMetaText(result.meta)}` : "已连接，云库暂无数据", result.meta || null);
+  } catch (error) {
+    setCloudDbStatus(`连接失败：${error.message}`);
+    if (!silent) alert(`Vercel 云同步检查失败：${error.message}`);
+  }
+}
+async function pullCloudDatabaseData({ silent = false, token = appSessionPassword, beforeUnlock = false } = {}) {
+  if (!cloudDatabaseAvailable()) {
+    setCloudDbStatus("本地文件打开不可用");
+    return { pulled: false, reason: "not-available" };
+  }
+  const syncToken = String(token || appSessionPassword || "").trim();
+  if (!syncToken) {
+    setCloudDbStatus("登录后自动同步");
+    return { pulled: false, reason: "missing-token" };
+  }
+  try {
+    const result = await callCloudData("pull", {}, syncToken);
+    if (result.data) {
+      if (!silent) createBackup("Vercel 云库刷新前备份");
+      data = mergeCloudData(result.data, data, "records");
+      persistLocal();
+      if (!data.members.includes(currentMember)) currentMember = data.members[0] || currentMember;
+      if (!beforeUnlock) {
+        loadForm();
+        render();
+      }
+      setCloudDbStatus(`已读取 Vercel 云库 · ${new Date().toLocaleTimeString("zh-CN")}`, result.meta || null);
+      return { pulled: true, data };
+    }
+    setCloudDbStatus("云库暂无数据，首次保存会创建");
+    return { pulled: false, reason: "empty-cloud" };
+  } catch (error) {
+    setCloudDbStatus(`读取失败：${error.message}`);
+    if (!silent) alert(`Vercel 云同步读取失败：${error.message}`);
+    return { pulled: false, reason: error.message };
+  }
+}
+async function saveCloudDatabaseData(mode = "records", silent = false) {
+  if (!cloudDatabaseAvailable()) {
+    setCloudDbStatus("本地文件打开不可用");
+    return { written: false, reason: "not-available" };
+  }
+  if (!appSessionPassword) {
+    setCloudDbStatus("未登录，不能写入 Vercel 云库");
+    return { written: false, reason: "missing-token" };
+  }
+  try {
+    const result = await callCloudData("save", { data: normalize(data), mode }, appSessionPassword);
+    if (result.data) {
+      data = normalize(result.data);
+      persistLocal();
+    }
+    setCloudDbStatus(`已写入 Vercel 云库 · ${new Date().toLocaleTimeString("zh-CN")}`, result.meta || null);
+    return { written: true, meta: result.meta || null };
+  } catch (error) {
+    setCloudDbStatus(`写入失败：${error.message}`);
+    if (!silent) alert(`Vercel 云同步写入失败：${error.message}`);
+    return { written: false, reason: error.message };
+  }
+}
+function startCloudDbPolling() {
+  window.clearInterval(cloudDbPollTimer);
+  if (!appSessionPassword || !cloudDatabaseAvailable()) return;
+  cloudDbPollTimer = window.setInterval(() => {
+    pullCloudDatabaseData({ silent: true }).catch(() => {});
+  }, 12000);
 }
 function cloudBackupAvailable() {
   return window.location.protocol !== "file:" && typeof fetch === "function";
@@ -1016,7 +1149,9 @@ async function saveAndAudit() {
   if (data.sheetBackupEnabled !== false) await backupSheets(true);
   render();
   if (!result?.written) {
-    showDialog("未同步到总数据", "这次只保存到了本机浏览器缓存。请先点击顶部“云端文件夹”，选择团队共享的 Google Drive 同步文件夹，再重新提交。", "");
+    showDialog("未同步到总数据", "这次只保存到了本机浏览器缓存。请确认 Vercel 已配置 DATABASE_URL 和 TEAM_SYNC_TOKEN，或点击顶部“云端文件夹”选择团队共享文件夹后重新提交。", "");
+  } else if (result.cloudDbWritten && !result.folderWritten) {
+    showDialog("已提交到 Vercel 云库", "记录已经写入 Vercel 云数据库，管理员刷新后可以统计。当前没有写入文件夹备份。", "");
   } else if (!data.autoAudit) {
     showDialog("已提交", "记录已同步云端，等待管理员审核。", "");
   } else if (autoStatus === "不达标") {
@@ -1692,16 +1827,28 @@ function showDialog(title, message, field) {
 function closeDialog() {
   $("dialog").classList.remove("show");
 }
-function unlockApp() {
+async function unlockApp() {
   const password = $("appPasswordInput").value;
-  if (password !== String(data.adminPassword || "999")) {
+  const localPasswordOk = password === String(data.adminPassword || "999");
+  let cloudPasswordOk = false;
+  if (!localPasswordOk) {
+    $("lockHint").textContent = "正在检查 Vercel 云库...";
+    const cloudResult = await pullCloudDatabaseData({ silent: true, token: password, beforeUnlock: true });
+    cloudPasswordOk = cloudResult.pulled || cloudResult.reason === "empty-cloud";
+  }
+  if (!localPasswordOk && !cloudPasswordOk) {
     $("lockHint").textContent = "密码不正确";
     $("appPasswordInput").select();
     return;
   }
+  appSessionPassword = password;
   appUnlocked = true;
   $("lockScreen").classList.add("hidden");
   $("appPasswordInput").value = "";
+  await pullCloudDatabaseData({ silent: true });
+  startCloudDbPolling();
+  loadForm();
+  render();
 }
 async function chooseSharedFile() {
   if (desktopApp?.isDesktop) {
@@ -2088,11 +2235,11 @@ async function saveAdminConfig() {
   render();
   if (!result?.written) {
     $("adminSaveStatus").textContent = `配置只保存为本地草稿 · ${new Date().toLocaleString("zh-CN")}`;
-    showDialog("配置未同步", "请先选择团队共享的云端文件夹。未连接云端时，配置只会留在本机浏览器缓存里。", "");
+    showDialog("配置未同步", "请确认 Vercel 云同步已配置，或选择团队共享的云端文件夹。未连接云端时，配置只会留在本机浏览器缓存里。", "");
     return;
   }
   $("adminSaveStatus").textContent = `配置已保存并同步 · ${new Date().toLocaleString("zh-CN")}`;
-  showDialog("配置已保存", "项目、定额和成员名单已经写入共享数据。其他成员同步后会自动更新。", "");
+  showDialog("配置已保存", result.cloudDbWritten ? "项目、定额和成员名单已经写入 Vercel 云数据库。其他成员同步后会自动更新。" : "项目、定额和成员名单已经写入共享数据。其他成员同步后会自动更新。", "");
 }
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (s) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[s] || s));
@@ -2115,9 +2262,13 @@ function bindEvents() {
     loadForm();
     render();
   };
-  $("unlockBtn").onclick = unlockApp;
+  $("unlockBtn").onclick = () => unlockApp().catch((err) => {
+    $("lockHint").textContent = err.message || "登录失败";
+  });
   $("appPasswordInput").onkeydown = (event) => {
-    if (event.key === "Enter") unlockApp();
+    if (event.key === "Enter") unlockApp().catch((err) => {
+      $("lockHint").textContent = err.message || "登录失败";
+    });
   };
   $("quotaInput").oninput = () => {
     data.quota = Number($("quotaInput").value || 0);
@@ -2258,9 +2409,16 @@ loadForm();
 render();
 setView(activeView);
 restoreCloudDirectory();
+refreshCloudDatabaseStatus(true);
 refreshCloudBackupStatus(true);
 startCloudPolling();
-window.addEventListener("focus", () => pollSharedFile(true));
+window.addEventListener("focus", () => {
+  pollSharedFile(true);
+  if (appUnlocked) pullCloudDatabaseData({ silent: true }).catch(() => {});
+});
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) pollSharedFile(true);
+  if (!document.hidden) {
+    pollSharedFile(true);
+    if (appUnlocked) pullCloudDatabaseData({ silent: true }).catch(() => {});
+  }
 });
