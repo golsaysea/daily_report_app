@@ -1089,12 +1089,23 @@ function checkinDisplay(value) {
   if (value) return checkinValueText(value);
   return "未打卡";
 }
+function checkinTimeText(value) {
+  if (!value || typeof value === "string") return "";
+  return value.time ? `记录时间 ${value.time}` : "";
+}
 function setCheckin(periodKey) {
   const now = new Date();
   const rec = currentRecord();
   const status = $(`checkinNote_${periodKey}`)?.value || "";
-  if (!status) return alert("请先选择打卡选项。");
   rec.checkins = rec.checkins || {};
+  if (!status) {
+    delete rec.checkins[periodKey];
+    persistLocal();
+    scheduleRecordCloudSave();
+    renderCheckins(rec.checkins);
+    renderOverview();
+    return;
+  }
   rec.checkins[periodKey] = {
     status,
     time: now.toLocaleTimeString("zh-CN", { hour12: false }),
@@ -1119,13 +1130,11 @@ function renderCheckins(seed = currentRecord().checkins || {}) {
         <option value="">选择打卡选项</option>
         ${options.map((option) => `<option value="${escapeAttr(option)}" ${checkinStatus(seed[period.key]) === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
       </select>
-      <button type="button" class="checkin-button" data-checkin-period="${period.key}">
-        ${escapeHtml(seed[period.key] ? checkinDisplay(seed[period.key]) : "记录时间")}
-      </button>
+      <span class="checkin-time">${escapeHtml(checkinTimeText(seed[period.key]) || "未记录时间")}</span>
     </label>
   `).join("");
-  box.querySelectorAll("button[data-checkin-period]").forEach((button) => {
-    button.onclick = () => setCheckin(button.dataset.checkinPeriod);
+  box.querySelectorAll("select[id^='checkinNote_']").forEach((select) => {
+    select.onchange = () => setCheckin(select.id.replace("checkinNote_", ""));
   });
 }
 function checkinSummary(checkins = {}) {

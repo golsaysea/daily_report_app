@@ -162,8 +162,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--green); box-shad
 .entry-field small { color: var(--muted); font-size: 12px; font-weight: 800; }
 .checkin-grid { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 10px; }
 .checkin-field { display: grid; gap: 6px; font-weight: 900; color: var(--muted); }
-.checkin-button { min-height: 42px; text-align: left; background: var(--green-soft); color: #1d6b33; }
-.checkin-button.late { background: var(--red-soft); color: var(--red); border-color: #edb3a5; }
+.checkin-time { min-height: 34px; display: flex; align-items: center; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--green-soft); color: #1d6b33; font-size: 13px; }
 table { width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 8px; background: #fbfcf8; }
 th, td { border-bottom: 1px solid var(--line); padding: 9px 10px; text-align: left; vertical-align: top; }
 th { background: #e9efe3; font-weight: 900; }
