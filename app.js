@@ -18,7 +18,7 @@
   adminPassword: "999",
   sheetBackupEnabled: true,
   backupCleanupEnabled: false,
-  autoAudit: true,
+  autoAudit: false,
   reviewMessages: {
     pass: ["恭喜达标", "今天很稳", "继续保持", "漂亮完成", "节奏很好", "进步明显", "状态在线", "效率不错", "超额很棒", "明天继续"],
     fail: ["很遗憾不达标", "明天补上", "先找原因", "差一点点", "继续加油", "调整节奏", "补救计划", "稳住再来", "目标明确", "别断复盘"]
@@ -120,7 +120,7 @@ function normalize(source) {
     adminPassword: String(loaded.adminPassword || defaultData.adminPassword),
     sheetBackupEnabled: loaded.sheetBackupEnabled !== false,
     backupCleanupEnabled: loaded.backupCleanupEnabled === true,
-    autoAudit: loaded.autoAudit !== false,
+    autoAudit: loaded.autoAudit === true,
     reviewMessages: {
       pass: Array.isArray(loaded.reviewMessages?.pass) ? loaded.reviewMessages.pass : clone(defaultData.reviewMessages.pass),
       fail: Array.isArray(loaded.reviewMessages?.fail) ? loaded.reviewMessages.fail : clone(defaultData.reviewMessages.fail)
@@ -219,7 +219,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.adminPassword = String(local.adminPassword || "999");
     merged.sheetBackupEnabled = local.sheetBackupEnabled !== false;
     merged.backupCleanupEnabled = local.backupCleanupEnabled === true;
-    merged.autoAudit = local.autoAudit !== false;
+    merged.autoAudit = local.autoAudit === true;
     merged.reviewMessages = clone(local.reviewMessages || defaultData.reviewMessages);
   } else {
     merged.rules = clone(remote.rules || local.rules);
@@ -235,7 +235,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.adminPassword = String(remote.adminPassword || local.adminPassword || "999");
     merged.sheetBackupEnabled = remote.sheetBackupEnabled !== false;
     merged.backupCleanupEnabled = remote.backupCleanupEnabled === true;
-    merged.autoAudit = remote.autoAudit !== false;
+    merged.autoAudit = remote.autoAudit === true;
     merged.reviewMessages = clone(remote.reviewMessages || local.reviewMessages || defaultData.reviewMessages);
   }
   return normalize(merged);
@@ -500,6 +500,14 @@ function scheduleRecordCloudSave() {
     saveCloudDatabaseData("records", true).catch(() => {});
   }, 1200);
 }
+function preserveActiveDraft() {
+  if (!appUnlocked || activeView !== "entry" || !$("entryInputs") || !$("dateInput")) return;
+  try {
+    saveFormSilently();
+  } catch {
+    // The draft saver is best-effort before refresh; normal editing can continue.
+  }
+}
 function setSyncStatus(message, location = cloudLocationLabel) {
   syncStatusText = message || syncStatusText;
   cloudLocationLabel = location || cloudLocationLabel;
@@ -649,6 +657,7 @@ async function pullCloudDatabaseData({ silent = false, token = appSessionPasswor
     return { pulled: false, reason: "missing-token" };
   }
   try {
+    if (!beforeUnlock) preserveActiveDraft();
     const result = await callCloudData("pull", {}, syncToken);
     if (result.data) {
       if (!silent) createBackup("Vercel 云库刷新前备份");
@@ -1076,40 +1085,18 @@ function checkinStatus(value) {
   if (!value) return "";
   return typeof value === "string" ? value : String(value.status || "");
 }
-function isBeforeLocalTime(date, hour, minute) {
-  return date.getHours() < hour || (date.getHours() === hour && date.getMinutes() <= minute);
-}
-function autoCheckinStatus(periodKey, now = new Date()) {
-  if (periodKey === "morning") return isBeforeLocalTime(now, 7, 30) ? "准时上线" : "迟到";
-  return "准时上线";
-}
-function isAfterUSEveningCutoff(day = currentDate) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    hour12: false
-  }).formatToParts(new Date()).reduce((acc, part) => {
-    acc[part.type] = part.value;
-    return acc;
-  }, {});
-  const usDay = `${parts.year}-${parts.month}-${parts.day}`;
-  return usDay > day || (usDay === day && Number(parts.hour || 0) >= 23);
-}
-function checkinDisplay(value, day = currentDate) {
+function checkinDisplay(value) {
   if (value) return checkinValueText(value);
-  return isAfterUSEveningCutoff(day) ? "迟到/未打卡" : "未打卡";
+  return "未打卡";
 }
 function setCheckin(periodKey) {
   const now = new Date();
   const rec = currentRecord();
-  const note = $(`checkinNote_${periodKey}`)?.value || "";
+  const status = $(`checkinNote_${periodKey}`)?.value || "";
+  if (!status) return alert("请先选择打卡选项。");
   rec.checkins = rec.checkins || {};
   rec.checkins[periodKey] = {
-    status: autoCheckinStatus(periodKey, now),
-    note,
+    status,
     time: now.toLocaleTimeString("zh-CN", { hour12: false }),
     iso: now.toISOString()
   };
@@ -1129,10 +1116,11 @@ function renderCheckins(seed = currentRecord().checkins || {}) {
     <label class="checkin-field">
       <span>${period.label}</span>
       <select id="checkinNote_${period.key}">
-        ${options.map((option) => `<option value="${escapeAttr(option)}" ${(seed[period.key]?.note || "") === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+        <option value="">选择打卡选项</option>
+        ${options.map((option) => `<option value="${escapeAttr(option)}" ${checkinStatus(seed[period.key]) === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
       </select>
-      <button type="button" class="checkin-button ${checkinStatus(seed[period.key]) === "迟到" ? "late" : ""}" data-checkin-period="${period.key}">
-        ${escapeHtml(checkinDisplay(seed[period.key], currentDate))}
+      <button type="button" class="checkin-button" data-checkin-period="${period.key}">
+        ${escapeHtml(seed[period.key] ? checkinDisplay(seed[period.key]) : "记录时间")}
       </button>
     </label>
   `).join("");
@@ -1141,7 +1129,7 @@ function renderCheckins(seed = currentRecord().checkins || {}) {
   });
 }
 function checkinSummary(checkins = {}) {
-  return checkinPeriods().map((period) => `${period.label}:${checkinDisplay(checkins[period.key], currentDate)}`).join(" ");
+  return checkinPeriods().map((period) => `${period.label}:${checkinDisplay(checkins[period.key])}`).join(" ");
 }
 function parseEntry(text) {
   const items = {};
@@ -1224,8 +1212,10 @@ function preview() {
   $("weightedTotal").textContent = fmt(parsed.weighted);
   $("auditText").textContent = passed ? "达标 ✓" : "不达标";
   $("auditCard").className = `metric ${passed ? "pass" : "fail"}`;
-  $("statusPill").textContent = passed ? "达标 ✓" : "不达标";
-  $("statusPill").className = `status ${passed ? "pass" : "fail"}`;
+  const manualStatus = $("statusSelect")?.value || "自动判断";
+  const displayStatus = manualStatus === "自动判断" ? "待审核" : manualStatus;
+  $("statusPill").textContent = displayStatus;
+  $("statusPill").className = `status ${displayStatus === "达标" ? "pass" : (displayStatus === "不达标" ? "fail" : "pending")}`;
   if ($("dailyQuotaInput")) $("dailyQuotaInput").placeholder = fmt(memberQuota(currentMember, currentDate));
   $("previewBody").innerHTML = Object.entries(parsed.items).map(([name, amount]) => {
     const weight = Number(data.rules[name] ?? 1);
@@ -1259,9 +1249,7 @@ function saveFormSilently() {
   const autoStatus = parsed.weighted >= quota ? "达标" : "不达标";
   const selected = $("statusSelect").value;
   const rec = currentRecord();
-  const finalStatus = data.autoAudit === false
-    ? (selected === "自动判断" ? "待审核" : selected)
-    : (selected === "自动判断" ? autoStatus : selected);
+  const finalStatus = selected === "自动判断" ? "待审核" : selected;
   Object.assign(rec, {
     date: currentDate,
     member: currentMember,
@@ -1287,22 +1275,16 @@ function pickReviewMessage(type) {
 }
 async function saveAndAudit() {
   createBackup("保存前备份");
-  const { rec, autoStatus } = saveFormSilently();
+  saveFormSilently();
   const result = await persistEverywhere("records");
   if (data.sheetBackupEnabled !== false) await backupSheets(true);
   render();
   if (!result?.written) {
     showDialog("未同步到总数据", "这次只保存到了本机浏览器缓存。请确认 Vercel 已配置 DATABASE_URL 和 TEAM_SYNC_TOKEN，或点击顶部“云端文件夹”选择团队共享文件夹后重新提交。", "");
   } else if (result.cloudDbWritten && !result.folderWritten) {
-    showDialog("已提交到 Vercel 云库", "记录已经写入 Vercel 云数据库，管理员刷新后可以统计。当前没有写入文件夹备份。", "");
-  } else if (!data.autoAudit) {
-    showDialog("已提交", "记录已同步云端，等待管理员审核。", "");
-  } else if (autoStatus === "不达标") {
-    showDialog(pickReviewMessage("fail"), "记录已提交云端。还没有达到定额，原因、收获和日记会在你编辑时自动保存。", "");
-  } else if (autoStatus === "达标") {
-    showDialog(pickReviewMessage("pass"), "记录已提交云端。今天达标或超额了，收获和日记会在你编辑时自动保存。", "");
+    showDialog("已提交到 Vercel 云库", "记录已经写入 Vercel 云数据库，等待管理员人工审核。当前没有写入文件夹备份。", "");
   } else {
-    showDialog("已提交", "记录已同步云端。", "");
+    showDialog("已提交", "记录已同步云端，等待管理员审核。", "");
   }
 }
 function renderMembers() {
@@ -1767,7 +1749,7 @@ function renderCheckinOverview() {
         <td>${escapeHtml(day)}</td>
         <td>${escapeHtml(group)}</td>
         <td>${escapeHtml(member)}</td>
-        ${checkinPeriods().map((period) => `<td>${escapeHtml(checkinDisplay(rec?.checkins?.[period.key], day))}</td>`).join("")}
+        ${checkinPeriods().map((period) => `<td>${escapeHtml(checkinDisplay(rec?.checkins?.[period.key]))}</td>`).join("")}
       </tr>
     `;
   }).join("") || `<tr><td colspan="6" class="hint">暂无打卡记录。</td></tr>`;
@@ -2013,7 +1995,7 @@ function renderTimezones() {
   });
 }
 function renderAdminSettings() {
-  $("autoAuditToggle").checked = data.autoAudit !== false;
+  $("autoAuditToggle").checked = false;
   $("sheetBackupToggle").checked = data.sheetBackupEnabled !== false;
   $("backupCleanupToggle").checked = data.backupCleanupEnabled === true;
   $("checkinOptionsInput").value = (data.checkinOptions || defaultData.checkinOptions).join("\n");
@@ -2021,7 +2003,7 @@ function renderAdminSettings() {
   $("failMessagesInput").value = (data.reviewMessages?.fail || defaultData.reviewMessages.fail).join("\n");
 }
 function collectAdminSettings() {
-  data.autoAudit = $("autoAuditToggle").checked;
+  data.autoAudit = false;
   data.sheetBackupEnabled = $("sheetBackupToggle").checked;
   data.backupCleanupEnabled = $("backupCleanupToggle").checked;
   data.checkinOptions = $("checkinOptionsInput").value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).slice(0, 20);
@@ -2176,7 +2158,8 @@ async function pollSharedFile(showIdle = true) {
       return;
     }
     createBackup("云端刷新前备份");
-    data = normalize(JSON.parse(result.text || "{}"));
+    preserveActiveDraft();
+    data = mergeCloudData(JSON.parse(result.text || "{}"), data, "records");
     lastFileModified = result.mtime || lastFileModified;
     lastCloudText = result.text || "";
     setSyncStatus(`发现云端更新，已刷新 · ${new Date().toLocaleTimeString("zh-CN")}`, result.path || cloudLocationLabel);
@@ -2196,6 +2179,7 @@ async function pollSharedFile(showIdle = true) {
       lastFileModified = file.lastModified;
       lastCloudText = text;
       createBackup("云端刷新前备份");
+      preserveActiveDraft();
       data = mergeCloudData(JSON.parse(text || "{}"), data, "records");
       persistLocal();
       if (!data.members.includes(currentMember)) currentMember = data.members[0];
