@@ -1064,6 +1064,7 @@ function currentRecord() {
       updated_at: ""
     };
   }
+  data.records[recordKey()].checkins = sanitizeCheckins(data.records[recordKey()].checkins || {});
   return data.records[recordKey()];
 }
 function checkinPeriods() {
@@ -1073,8 +1074,21 @@ function checkinPeriods() {
     { key: "evening", label: "晚" }
   ];
 }
+function isLegacyAutoCheckin(value) {
+  const status = checkinStatus(value);
+  return status === "准时上线" || status === "迟到";
+}
+function sanitizeCheckins(checkins = {}) {
+  const cleaned = {};
+  Object.entries(checkins || {}).forEach(([key, value]) => {
+    if (!value || isLegacyAutoCheckin(value)) return;
+    cleaned[key] = value;
+  });
+  return cleaned;
+}
 function checkinValueText(value) {
   if (!value) return "";
+  if (isLegacyAutoCheckin(value)) return "";
   if (typeof value === "string") return value;
   const status = value.status || "";
   const note = value.note ? `/${value.note}` : "";
@@ -1090,7 +1104,7 @@ function checkinDisplay(value) {
   return "未打卡";
 }
 function checkinTimeText(value) {
-  if (!value || typeof value === "string") return "";
+  if (!value || typeof value === "string" || isLegacyAutoCheckin(value)) return "";
   return value.time ? `记录时间 ${value.time}` : "";
 }
 function setCheckin(periodKey) {
@@ -1117,11 +1131,12 @@ function setCheckin(periodKey) {
   renderOverview();
 }
 function readCheckins() {
-  return clone(currentRecord().checkins || {});
+  return sanitizeCheckins(clone(currentRecord().checkins || {}));
 }
 function renderCheckins(seed = currentRecord().checkins || {}) {
   const box = $("checkinInputs");
   if (!box) return;
+  seed = sanitizeCheckins(seed);
   const options = data.checkinOptions?.length ? data.checkinOptions : defaultData.checkinOptions;
   box.innerHTML = checkinPeriods().map((period) => `
     <label class="checkin-field">
