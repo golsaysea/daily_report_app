@@ -25,6 +25,7 @@
       <nav class="tabs" aria-label="视图">
         <button class="tab active" data-view="entry">今日</button>
         <button class="tab" data-view="overview">整体预览</button>
+        <button class="tab" data-view="timezones">时区管理</button>
         <button class="tab" data-view="admin">管理员</button>
       </nav>
       <div class="actions">
@@ -124,6 +125,10 @@
           </section>
           <section class="panel">
             <div class="panel-head"><h2>项目明细</h2><span class="hint" id="detailHint"></span></div>
+            <div class="analysis-controls">
+              <select id="overviewDetailGroup"></select>
+              <select id="overviewDetailMember"></select>
+            </div>
             <div class="table-scroll">
               <table>
                 <thead id="detailHead"></thead>
@@ -131,6 +136,20 @@
               </table>
             </div>
           </section>
+          <details class="panel overview-group" open>
+            <summary><span>打卡情况</span><strong id="checkinOverviewHint"></strong></summary>
+            <div class="analysis-controls">
+              <select id="checkinViewGroup"></select>
+              <select id="checkinViewMember"></select>
+              <input id="checkinViewDate" type="date">
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead id="checkinHead"></thead>
+                <tbody id="checkinBody"></tbody>
+              </table>
+            </div>
+          </details>
           <section class="panel">
             <div class="panel-head">
               <h2>效率分析</h2>
@@ -187,6 +206,18 @@
               <thead><tr><th>日期</th><th>成员</th><th>原始</th><th>换算</th><th>状态</th><th>备注</th></tr></thead>
               <tbody id="historyBody"></tbody>
             </table>
+          </section>
+        </section>
+
+        <section class="view" id="timezonesView">
+          <section class="panel">
+            <div class="panel-head"><h2>时区管理</h2><span class="hint">实时按当前系统时间换算</span></div>
+            <div class="add-member admin-add">
+              <input id="timezoneNameInput" placeholder="时间名称，例如：纽约">
+              <input id="timezoneOffsetInput" placeholder="UTC 偏移，例如：-05:00">
+              <button class="icon" id="addTimezoneBtn" title="添加时区">+</button>
+            </div>
+            <div class="backup-list" id="timezoneList"></div>
           </section>
         </section>
 

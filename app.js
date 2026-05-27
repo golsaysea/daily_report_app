@@ -11,6 +11,10 @@
   memberQuotas: {},
   dailyQuotas: {},
   checkinOptions: ["准时上线", "迟到"],
+  timezones: [
+    { name: "北京时间", offset: "+08:00" },
+    { name: "罗马时间", offset: "+02:00" }
+  ],
   adminPassword: "999",
   sheetBackupEnabled: true,
   backupCleanupEnabled: false,
@@ -52,6 +56,10 @@ let sourceDatasets = [];
 let mergedSourceDataset = null;
 let reportDataOverride = null;
 let analysisTableMember = "";
+let overviewDetailGroup = "";
+let overviewDetailMember = "";
+let checkinViewGroup = "";
+let checkinViewMember = "";
 let pendingDialogField = "";
 let activeView = "entry";
 let saveTimer = 0;
@@ -103,6 +111,12 @@ function normalize(source) {
     memberQuotas,
     dailyQuotas,
     checkinOptions,
+    timezones: Array.isArray(loaded.timezones) && loaded.timezones.length
+      ? loaded.timezones.map((item) => ({
+        name: String(item.name || "时间").trim() || "时间",
+        offset: String(item.offset || "+08:00").trim() || "+08:00"
+      }))
+      : clone(defaultData.timezones),
     adminPassword: String(loaded.adminPassword || defaultData.adminPassword),
     sheetBackupEnabled: loaded.sheetBackupEnabled !== false,
     backupCleanupEnabled: loaded.backupCleanupEnabled === true,
@@ -908,6 +922,24 @@ function groupMembers(group) {
   const report = reportData();
   return report.members.filter((member) => (report.memberGroups?.[member] || report.groups[0]) === group);
 }
+function membersForGroupValue(group, report = reportData()) {
+  if (!group || group === "__all__") return report.members || [];
+  return (report.members || []).filter((member) => (report.memberGroups?.[member] || report.groups?.[0]) === group);
+}
+function renderGroupMemberSelectors(groupId, memberId, selectedGroup, selectedMember, includeAll = true) {
+  const report = reportData();
+  const groupSelect = $(groupId);
+  const memberSelect = $(memberId);
+  if (!groupSelect || !memberSelect) return { group: selectedGroup || "__all__", member: selectedMember || "" };
+  const currentGroup = selectedGroup || groupSelect.value || "__all__";
+  groupSelect.innerHTML = `${includeAll ? `<option value="__all__">全部分组</option>` : ""}${report.groups.map((group) => `<option value="${escapeAttr(group)}">${escapeHtml(group)}</option>`).join("")}`;
+  groupSelect.value = [...groupSelect.options].some((option) => option.value === currentGroup) ? currentGroup : (includeAll ? "__all__" : report.groups[0] || "");
+  const members = membersForGroupValue(groupSelect.value, report);
+  const currentMemberValue = selectedMember || memberSelect.value || members[0] || "";
+  memberSelect.innerHTML = members.map((member) => `<option value="${escapeAttr(member)}">${escapeHtml(member)}</option>`).join("");
+  memberSelect.value = members.includes(currentMemberValue) ? currentMemberValue : members[0] || "";
+  return { group: groupSelect.value, member: memberSelect.value };
+}
 function dateFromKey(key) {
   const date = new Date(`${key}T00:00:00`);
   return Number.isNaN(date.getTime()) ? new Date() : date;
@@ -1017,34 +1049,58 @@ function checkinPeriods() {
     { key: "evening", label: "晚" }
   ];
 }
+function checkinValueText(value) {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  const status = value.status || "";
+  const time = value.time ? ` ${value.time}` : "";
+  return `${status}${time}`.trim();
+}
+function checkinStatus(value) {
+  if (!value) return "";
+  return typeof value === "string" ? value : String(value.status || "");
+}
+function isBeforeLocalTime(date, hour, minute) {
+  return date.getHours() < hour || (date.getHours() === hour && date.getMinutes() <= minute);
+}
+function autoCheckinStatus(periodKey, now = new Date()) {
+  if (periodKey === "morning") return isBeforeLocalTime(now, 7, 30) ? "准时上线" : "迟到";
+  return "准时上线";
+}
+function setCheckin(periodKey) {
+  const now = new Date();
+  const rec = currentRecord();
+  rec.checkins = rec.checkins || {};
+  rec.checkins[periodKey] = {
+    status: autoCheckinStatus(periodKey, now),
+    time: now.toLocaleTimeString("zh-CN", { hour12: false }),
+    iso: now.toISOString()
+  };
+  persistLocal();
+  scheduleRecordCloudSave();
+  renderCheckins(rec.checkins);
+  renderOverview();
+}
 function readCheckins() {
-  const values = {};
-  document.querySelectorAll("select[data-checkin-period]").forEach((select) => {
-    values[select.dataset.checkinPeriod] = select.value;
-  });
-  return values;
+  return clone(currentRecord().checkins || {});
 }
 function renderCheckins(seed = currentRecord().checkins || {}) {
   const box = $("checkinInputs");
   if (!box) return;
-  const options = data.checkinOptions?.length ? data.checkinOptions : defaultData.checkinOptions;
   box.innerHTML = checkinPeriods().map((period) => `
     <label class="checkin-field">
       <span>${period.label}</span>
-      <select data-checkin-period="${period.key}">
-        ${options.map((option) => `<option value="${escapeAttr(option)}" ${seed[period.key] === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
-      </select>
+      <button type="button" class="checkin-button ${checkinStatus(seed[period.key]) === "迟到" ? "late" : ""}" data-checkin-period="${period.key}">
+        ${escapeHtml(checkinValueText(seed[period.key]) || "点击打卡")}
+      </button>
     </label>
   `).join("");
-  box.querySelectorAll("select[data-checkin-period]").forEach((select) => {
-    select.onchange = () => {
-      scheduleDraftSave();
-      renderOverview();
-    };
+  box.querySelectorAll("button[data-checkin-period]").forEach((button) => {
+    button.onclick = () => setCheckin(button.dataset.checkinPeriod);
   });
 }
 function checkinSummary(checkins = {}) {
-  return checkinPeriods().map((period) => `${period.label}:${checkins[period.key] || "未填"}`).join(" ");
+  return checkinPeriods().map((period) => `${period.label}:${checkinValueText(checkins[period.key]) || "未填"}`).join(" ");
 }
 function parseEntry(text) {
   const items = {};
@@ -1226,9 +1282,11 @@ function renderMembers() {
       localStorage.setItem("dailyReportCollapsedGroups", JSON.stringify(collapsedGroups));
     };
     members.forEach((name) => {
+      const todayQuota = memberQuota(name, currentDate);
+      const defaultQuota = data.memberQuotas[name] === "" || data.memberQuotas[name] === undefined ? data.quota : data.memberQuotas[name];
       const btn = document.createElement("button");
       btn.className = `member ${name === currentMember ? "active" : ""}`;
-      btn.innerHTML = `<span><span>${escapeHtml(name)}</span></span><span class="badge">${memberTodayStatus(name)}</span>`;
+      btn.innerHTML = `<span><span>${escapeHtml(name)}</span><small>今日 ${fmt(todayQuota)} · 默认 ${fmt(defaultQuota)}</small></span><span class="badge">${memberTodayStatus(name)}</span>`;
       btn.onclick = () => {
         saveFormSilently();
         currentMember = name;
@@ -1327,20 +1385,38 @@ function renderMemberQuotas() {
   });
 }
 function renderMemberGroups() {
-  $("memberGroupBox").innerHTML = data.members.map((name, index) => {
-    const group = data.memberGroups?.[name] || data.groups[0] || "";
+  $("memberGroupBox").innerHTML = data.groups.map((group) => {
+    const members = data.members.filter((name) => (data.memberGroups?.[name] || data.groups[0]) === group);
     return `
-      <div class="member-group-row">
-        <input value="${escapeAttr(name)}" data-member-name="${escapeAttr(name)}" aria-label="成员">
-        <select data-member-group="${escapeAttr(name)}">
-          ${data.groups.map((item) => `<option value="${escapeAttr(item)}" ${item === group ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}
-        </select>
-        <button class="icon" data-move-up="${escapeAttr(name)}" ${index === 0 ? "disabled" : ""} title="上移">↑</button>
-        <button class="icon" data-move-down="${escapeAttr(name)}" ${index === data.members.length - 1 ? "disabled" : ""} title="下移">↓</button>
-        <button class="icon" data-remove-member="${escapeAttr(name)}" title="删除成员">×</button>
-      </div>
+      <details class="overview-group" open>
+        <summary>
+          <input value="${escapeAttr(group)}" data-group-name="${escapeAttr(group)}" aria-label="分组名称">
+          <button class="icon" data-remove-group="${escapeAttr(group)}" title="删除分组">×</button>
+        </summary>
+        ${members.map((name) => {
+          const index = data.members.indexOf(name);
+          const groupValue = data.memberGroups?.[name] || data.groups[0] || "";
+          return `
+            <div class="member-group-row">
+              <input value="${escapeAttr(name)}" data-member-name="${escapeAttr(name)}" aria-label="成员">
+              <select data-member-group="${escapeAttr(name)}">
+                ${data.groups.map((item) => `<option value="${escapeAttr(item)}" ${item === groupValue ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}
+              </select>
+              <button class="icon" data-move-up="${escapeAttr(name)}" ${index === 0 ? "disabled" : ""} title="上移">↑</button>
+              <button class="icon" data-move-down="${escapeAttr(name)}" ${index === data.members.length - 1 ? "disabled" : ""} title="下移">↓</button>
+              <button class="icon" data-remove-member="${escapeAttr(name)}" title="删除成员">×</button>
+            </div>
+          `;
+        }).join("") || `<div class="hint">这个分组还没有成员。</div>`}
+      </details>
     `;
   }).join("");
+  $("memberGroupBox").querySelectorAll("input[data-group-name]").forEach((input) => {
+    input.onchange = () => renameGroup(input.dataset.groupName, input.value.trim());
+  });
+  $("memberGroupBox").querySelectorAll("button[data-remove-group]").forEach((button) => {
+    button.onclick = () => removeGroup(button.dataset.removeGroup);
+  });
   $("memberGroupBox").querySelectorAll("input[data-member-name]").forEach((input) => {
     input.onchange = () => renameMember(input.dataset.memberName, input.value.trim());
   });
@@ -1391,6 +1467,31 @@ function addGroup(name) {
   data.groups.push(name);
   data.groupItems[name] = configuredItems();
   $("groupNameInput").value = "";
+  render();
+  scheduleSave("admin");
+}
+function renameGroup(oldName, newName) {
+  if (!newName || oldName === newName || data.groups.includes(newName)) return renderMemberGroups();
+  data.groups = data.groups.map((group) => group === oldName ? newName : group);
+  data.members.forEach((member) => {
+    if ((data.memberGroups[member] || oldName) === oldName) data.memberGroups[member] = newName;
+  });
+  if (data.groupItems?.[oldName]) {
+    data.groupItems[newName] = data.groupItems[oldName];
+    delete data.groupItems[oldName];
+  }
+  render();
+  scheduleSave("admin");
+}
+function removeGroup(name) {
+  if (data.groups.length <= 1) return alert("至少保留一个分组。");
+  const fallback = data.groups.find((group) => group !== name) || data.groups[0];
+  if (!confirm(`确定删除分组“${name}”？成员会移动到“${fallback}”。`)) return;
+  data.groups = data.groups.filter((group) => group !== name);
+  data.members.forEach((member) => {
+    if (data.memberGroups[member] === name) data.memberGroups[member] = fallback;
+  });
+  delete data.groupItems[name];
   render();
   scheduleSave("admin");
 }
@@ -1552,7 +1653,11 @@ function renderOverview() {
       setView("entry");
     };
   });
-  $("detailHint").textContent = itemNames.map((name) => `${name} ${fmt(itemTotals[name])}`).join(" · ");
+  const detailPick = renderGroupMemberSelectors("overviewDetailGroup", "overviewDetailMember", overviewDetailGroup, overviewDetailMember);
+  overviewDetailGroup = detailPick.group;
+  overviewDetailMember = detailPick.member;
+  const detailRow = rows.find((row) => row.member === overviewDetailMember) || rows[0];
+  $("detailHint").textContent = `团队：${itemNames.map((name) => `${name} ${fmt(itemTotals[name])}`).join(" · ")}${detailRow ? ` ｜ 当前个人：${detailRow.member}` : ""}`;
   $("detailHead").innerHTML = `
     <tr>
       <th>成员</th>
@@ -1566,31 +1671,24 @@ function renderOverview() {
       <th>备注</th>
     </tr>
   `;
-  $("detailBody").innerHTML = rows.map((row) => `
+  const detailRows = [
+    { label: "总队数据", items: itemTotals, raw: rows.reduce((sum, row) => sum + Number(row.rec?.raw_total || 0), 0), weighted: totalWeighted, quota: totalQuota, diff: totalWeighted - totalQuota, status: teamPassed ? "完成" : "未完成", checkins: "", note: "" },
+    detailRow ? { label: detailRow.member, items: detailRow.items, raw: Number(detailRow.rec?.raw_total || 0), weighted: detailRow.weighted, quota: detailRow.quota, diff: detailRow.weighted - detailRow.quota, status: detailRow.passed ? "达标" : "未达", checkins: checkinSummary(detailRow.checkins), note: detailRow.rec?.reason || detailRow.rec?.harvest || "" } : null
+  ].filter(Boolean);
+  $("detailBody").innerHTML = detailRows.map((row) => `
     <tr>
-      <td>${escapeHtml(row.member)}</td>
+      <td>${escapeHtml(row.label)}</td>
       ${itemNames.map((name) => `<td>${fmt(row.items[name] || 0)}</td>`).join("")}
-      <td>${fmt(row.rec?.raw_total || 0)}</td>
+      <td>${fmt(row.raw || 0)}</td>
       <td>${fmt(row.weighted)}</td>
       <td>${fmt(row.quota)}</td>
-      <td>${row.weighted - row.quota >= 0 ? "+" : ""}${fmt(row.weighted - row.quota)}</td>
-      <td>${row.passed ? "达标" : "未达"}</td>
-      <td>${escapeHtml(checkinSummary(row.checkins))}</td>
-      <td>${escapeHtml(row.rec?.reason || row.rec?.harvest || "")}</td>
+      <td>${row.diff >= 0 ? "+" : ""}${fmt(row.diff)}</td>
+      <td>${escapeHtml(row.status)}</td>
+      <td>${escapeHtml(row.checkins)}</td>
+      <td>${escapeHtml(row.note)}</td>
     </tr>
-  `).join("") + `
-    <tr>
-      <th>合计</th>
-      ${itemNames.map((name) => `<th>${fmt(itemTotals[name])}</th>`).join("")}
-      <th>${fmt(rows.reduce((sum, row) => sum + Number(row.rec?.raw_total || 0), 0))}</th>
-      <th>${fmt(totalWeighted)}</th>
-      <th>${fmt(totalQuota)}</th>
-      <th>${totalWeighted - totalQuota >= 0 ? "+" : ""}${fmt(totalWeighted - totalQuota)}</th>
-      <th>${teamPassed ? "完成" : "未完成"}</th>
-      <th></th>
-      <th></th>
-    </tr>
-  `;
+  `).join("");
+  renderCheckinOverview();
   renderAnalytics();
 }
 function renderHistory() {
@@ -1608,6 +1706,30 @@ function renderHistory() {
       <td>${escapeHtml(r.reason || r.harvest || "")}</td>
     </tr>
   `).join("") || `<tr><td colspan="6" class="hint">还没有历史记录。</td></tr>`;
+}
+function renderCheckinOverview() {
+  const report = reportData();
+  if (!$("checkinHead")) return;
+  const pick = renderGroupMemberSelectors("checkinViewGroup", "checkinViewMember", checkinViewGroup, checkinViewMember);
+  checkinViewGroup = pick.group;
+  checkinViewMember = pick.member;
+  if (!$("checkinViewDate").value) $("checkinViewDate").value = currentDate;
+  const day = $("checkinViewDate").value || currentDate;
+  const members = checkinViewMember ? [checkinViewMember] : membersForGroupValue(checkinViewGroup, report);
+  $("checkinOverviewHint").textContent = `${day} · ${members.length || 0} 人`;
+  $("checkinHead").innerHTML = `<tr><th>日期</th><th>分组</th><th>成员</th>${checkinPeriods().map((period) => `<th>${period.label}</th>`).join("")}</tr>`;
+  $("checkinBody").innerHTML = members.map((member) => {
+    const rec = report.records?.[`${day}|${member}`];
+    const group = report.memberGroups?.[member] || report.groups?.[0] || "";
+    return `
+      <tr>
+        <td>${escapeHtml(day)}</td>
+        <td>${escapeHtml(group)}</td>
+        <td>${escapeHtml(member)}</td>
+        ${checkinPeriods().map((period) => `<td>${escapeHtml(checkinValueText(rec?.checkins?.[period.key]) || "未打卡")}</td>`).join("")}
+      </tr>
+    `;
+  }).join("") || `<tr><td colspan="6" class="hint">暂无打卡记录。</td></tr>`;
 }
 function renderAnalysisMemberOptions() {
   const report = reportData();
@@ -1647,23 +1769,32 @@ function renderAnalytics() {
   const diffDelta = current.diff - previous.diff;
   const rate = current.quota > 0 ? Math.round(current.weighted / current.quota * 100) : 100;
   const label = scope === "member" ? member : scope === "group" ? $("analysisGroup").value : "团队";
+  const yesterday = aggregatePeriod([addDays(currentDate, -1)], scope, member);
+  const today = aggregatePeriod([currentDate], scope, member);
+  const todayDelta = today.weighted - yesterday.weighted;
   const compareLabel = { previous: `当前 ${range} 天 vs 前 ${range} 天`, thisWeek: "本周累计", lastMonth: "对比上月同期" }[compareMode] || `当前 ${range} 天 vs 前 ${range} 天`;
   $("analysisHint").textContent = `${label} · ${compareMode === "thisWeek" ? "本周" : `${range} 天`} · ${compareLabel}`;
   $("analysisSummary").innerHTML = `
     <div class="analysis-card"><span>完成量</span><strong>${fmt(current.weighted)}</strong></div>
     <div class="analysis-card"><span>周期定额</span><strong>${fmt(current.quota)}</strong></div>
     <div class="analysis-card ${current.diff >= 0 ? "good" : "bad"}"><span>周期差额</span><strong>${current.diff >= 0 ? "+" : ""}${fmt(current.diff)}</strong></div>
-    <div class="analysis-card ${weightedDelta >= 0 ? "good" : "bad"}"><span>完成量对比</span><strong>${weightedDelta >= 0 ? "+" : ""}${fmt(weightedDelta)}</strong></div>
+    <div class="analysis-card ${todayDelta >= 0 ? "good" : "bad"}"><span>今日较昨日</span><strong>${todayDelta >= 0 ? `增长 ${fmt(todayDelta)}` : `下滑 ${fmt(Math.abs(todayDelta))}`}</strong></div>
   `;
+  const itemDeltaRows = Object.entries(today.itemTotals).map(([name, value]) => {
+    const previousValue = Number(yesterday.itemTotals[name] || 0);
+    const delta = Number(value || 0) - previousValue;
+    return { label: `${name}：${delta >= 0 ? "增加" : "减少"} ${fmt(Math.abs(delta))}`, weighted: delta };
+  });
   $("compareSummary").innerHTML = `
     <div class="analysis-card"><span>当前段</span><strong>${fmt(current.weighted)}</strong></div>
     <div class="analysis-card"><span>对比段</span><strong>${fmt(previous.weighted)}</strong></div>
     <div class="analysis-card ${weightedDelta >= 0 ? "good" : "bad"}"><span>完成量差</span><strong>${weightedDelta >= 0 ? "+" : ""}${fmt(weightedDelta)}</strong></div>
-    <div class="analysis-card ${diffDelta >= 0 ? "good" : "bad"}"><span>差额变化</span><strong>${diffDelta >= 0 ? "+" : ""}${fmt(diffDelta)}</strong></div>
+    <div class="analysis-card ${diffDelta >= 0 ? "good" : "bad"}"><span>差额变化</span><strong>${diffDelta >= 0 ? "增长" : "下滑"} ${fmt(Math.abs(diffDelta))}</strong></div>
   `;
   renderMiniBars("compareChart", [
     { label: `${days[0].slice(5)}-${days[days.length - 1].slice(5)}`, weighted: current.weighted },
-    { label: `${compareDays[0].slice(5)}-${compareDays[compareDays.length - 1].slice(5)}`, weighted: previous.weighted }
+    { label: `${compareDays[0].slice(5)}-${compareDays[compareDays.length - 1].slice(5)}`, weighted: previous.weighted },
+    ...itemDeltaRows
   ], "weighted");
   renderMiniBars("analysisChart", currentDisplay.daily.map((row) => ({
     label: row.day.slice(5),
@@ -1808,6 +1939,37 @@ function renderBackups() {
     });
   });
 }
+function parseUtcOffset(offset) {
+  const match = String(offset || "").trim().match(/^([+-])(\d{1,2}):?(\d{2})?$/);
+  if (!match) return 0;
+  const sign = match[1] === "-" ? -1 : 1;
+  return sign * (Number(match[2] || 0) * 60 + Number(match[3] || 0));
+}
+function timezoneNow(offset) {
+  const now = new Date();
+  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+  return new Date(utc + parseUtcOffset(offset) * 60000);
+}
+function renderTimezones() {
+  const box = $("timezoneList");
+  if (!box) return;
+  box.innerHTML = (data.timezones || defaultData.timezones).map((item, index) => {
+    const time = timezoneNow(item.offset).toLocaleString("zh-CN", { hour12: false });
+    return `
+      <div class="backup-item">
+        <span><strong>${escapeHtml(item.name)}</strong> · UTC${escapeHtml(item.offset)} · ${escapeHtml(time)}</span>
+        <button data-remove-timezone="${index}">删除</button>
+      </div>
+    `;
+  }).join("") || `<div class="hint">还没有时区。</div>`;
+  box.querySelectorAll("[data-remove-timezone]").forEach((button) => {
+    button.onclick = () => {
+      data.timezones.splice(Number(button.dataset.removeTimezone), 1);
+      renderTimezones();
+      scheduleSave("admin");
+    };
+  });
+}
 function renderAdminSettings() {
   $("autoAuditToggle").checked = data.autoAudit !== false;
   $("sheetBackupToggle").checked = data.sheetBackupEnabled !== false;
@@ -1843,6 +2005,7 @@ function render() {
   renderSyncPanel();
   renderCloudBackupPanel();
   renderCloudHistoryPanel();
+  renderTimezones();
   renderSummaryFolders();
   renderReportSourceTabs();
   $("quotaInput").value = String(data.quota);
@@ -2361,6 +2524,20 @@ function bindEvents() {
   ["analysisScope", "analysisGroup", "analysisMember", "analysisRange", "analysisCustomDays", "analysisCompare", "rangeStart", "rangeEnd"].forEach((id) => {
     $(id).onchange = renderAnalytics;
   });
+  ["overviewDetailGroup", "overviewDetailMember"].forEach((id) => {
+    $(id).onchange = () => {
+      overviewDetailGroup = $("overviewDetailGroup").value;
+      overviewDetailMember = $("overviewDetailMember").value;
+      renderOverview();
+    };
+  });
+  ["checkinViewGroup", "checkinViewMember", "checkinViewDate"].forEach((id) => {
+    $(id).onchange = () => {
+      checkinViewGroup = $("checkinViewGroup").value;
+      checkinViewMember = $("checkinViewMember").value;
+      renderCheckinOverview();
+    };
+  });
   $("analysisCustomDays").oninput = renderAnalytics;
   $("addRuleBtn").onclick = () => {
     const name = nextRuleName();
@@ -2405,6 +2582,16 @@ function bindEvents() {
   $("addMemberBtn").onclick = () => addMember($("memberName").value.trim());
   $("adminAddMemberBtn").onclick = () => addMember($("adminMemberName").value.trim());
   $("addGroupBtn").onclick = () => addGroup($("groupNameInput").value.trim());
+  $("addTimezoneBtn").onclick = () => {
+    const name = $("timezoneNameInput").value.trim();
+    const offset = $("timezoneOffsetInput").value.trim();
+    if (!name || !/^[+-]\d{1,2}:?\d{2}$/.test(offset)) return alert("请填写名称和 UTC 偏移，例如 +08:00 或 -05:00。");
+    data.timezones.push({ name, offset });
+    $("timezoneNameInput").value = "";
+    $("timezoneOffsetInput").value = "";
+    renderTimezones();
+    scheduleSave("admin");
+  };
   $("compactToggle").onchange = () => $("app").classList.toggle("compact", $("compactToggle").checked);
   $("openFileBtn").onclick = () => chooseSharedFile().catch((err) => alert(`打开失败：${err.message}`));
   $("sidebarToggle").onclick = () => {
