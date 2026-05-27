@@ -21,6 +21,7 @@ const defaultData = {
   sheetBackupEnabled: true,
   backupCleanupEnabled: false,
   autoAudit: true,
+  deletedMembers: {},
   reviewMessages: {
     pass: ["恭喜达标", "今天很稳", "继续保持", "漂亮完成", "节奏很好", "进步明显", "状态在线", "效率不错", "超额很棒", "明天继续"],
     fail: ["很遗憾不达标", "明天补上", "先找原因", "差一点点", "继续加油", "调整节奏", "补救计划", "稳住再来", "目标明确", "别断复盘"]
@@ -112,6 +113,7 @@ function normalize(source) {
     sheetBackupEnabled: loaded.sheetBackupEnabled !== false,
     backupCleanupEnabled: loaded.backupCleanupEnabled === true,
     autoAudit: loaded.autoAudit !== false,
+    deletedMembers: loaded.deletedMembers && typeof loaded.deletedMembers === "object" ? clone(loaded.deletedMembers) : {},
     reviewMessages: {
       pass: Array.isArray(loaded.reviewMessages?.pass) ? loaded.reviewMessages.pass : clone(defaultData.reviewMessages.pass),
       fail: Array.isArray(loaded.reviewMessages?.fail) ? loaded.reviewMessages.fail : clone(defaultData.reviewMessages.fail)
@@ -167,6 +169,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.sheetBackupEnabled = local.sheetBackupEnabled !== false;
     merged.backupCleanupEnabled = local.backupCleanupEnabled === true;
     merged.autoAudit = local.autoAudit !== false;
+    merged.deletedMembers = clone(local.deletedMembers || {});
     merged.reviewMessages = clone(local.reviewMessages || defaultData.reviewMessages);
   } else {
     merged.rules = clone(remote.rules || local.rules);
@@ -183,8 +186,13 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.sheetBackupEnabled = remote.sheetBackupEnabled !== false;
     merged.backupCleanupEnabled = remote.backupCleanupEnabled === true;
     merged.autoAudit = remote.autoAudit !== false;
+    merged.deletedMembers = { ...(local.deletedMembers || {}), ...(remote.deletedMembers || {}) };
     merged.reviewMessages = clone(remote.reviewMessages || local.reviewMessages || defaultData.reviewMessages);
   }
+  Object.keys(merged.records || {}).forEach((key) => {
+    const member = merged.records[key]?.member || String(key).split("|").slice(1).join("|");
+    if (merged.deletedMembers?.[member]) delete merged.records[key];
+  });
   merged.updated_at = new Date().toISOString();
   return normalize(merged);
 }

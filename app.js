@@ -19,6 +19,7 @@
   sheetBackupEnabled: true,
   backupCleanupEnabled: false,
   autoAudit: false,
+  deletedMembers: {},
   reviewMessages: {
     pass: ["恭喜达标", "今天很稳", "继续保持", "漂亮完成", "节奏很好", "进步明显", "状态在线", "效率不错", "超额很棒", "明天继续"],
     fail: ["很遗憾不达标", "明天补上", "先找原因", "差一点点", "继续加油", "调整节奏", "补救计划", "稳住再来", "目标明确", "别断复盘"]
@@ -121,6 +122,7 @@ function normalize(source) {
     sheetBackupEnabled: loaded.sheetBackupEnabled !== false,
     backupCleanupEnabled: loaded.backupCleanupEnabled === true,
     autoAudit: loaded.autoAudit === true,
+    deletedMembers: loaded.deletedMembers && typeof loaded.deletedMembers === "object" ? clone(loaded.deletedMembers) : {},
     reviewMessages: {
       pass: Array.isArray(loaded.reviewMessages?.pass) ? loaded.reviewMessages.pass : clone(defaultData.reviewMessages.pass),
       fail: Array.isArray(loaded.reviewMessages?.fail) ? loaded.reviewMessages.fail : clone(defaultData.reviewMessages.fail)
@@ -220,6 +222,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.sheetBackupEnabled = local.sheetBackupEnabled !== false;
     merged.backupCleanupEnabled = local.backupCleanupEnabled === true;
     merged.autoAudit = local.autoAudit === true;
+    merged.deletedMembers = clone(local.deletedMembers || {});
     merged.reviewMessages = clone(local.reviewMessages || defaultData.reviewMessages);
   } else {
     merged.rules = clone(remote.rules || local.rules);
@@ -236,8 +239,13 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.sheetBackupEnabled = remote.sheetBackupEnabled !== false;
     merged.backupCleanupEnabled = remote.backupCleanupEnabled === true;
     merged.autoAudit = remote.autoAudit === true;
+    merged.deletedMembers = { ...(local.deletedMembers || {}), ...(remote.deletedMembers || {}) };
     merged.reviewMessages = clone(remote.reviewMessages || local.reviewMessages || defaultData.reviewMessages);
   }
+  Object.keys(merged.records || {}).forEach((key) => {
+    const member = merged.records[key]?.member || String(key).split("|").slice(1).join("|");
+    if (merged.deletedMembers?.[member]) delete merged.records[key];
+  });
   return normalize(merged);
 }
 function mergeSummaryData(baseSource, sourceData) {
@@ -934,8 +942,10 @@ function groupMembers(group) {
 function reportMembers(report = reportData()) {
   const members = new Set(report.members || []);
   Object.values(report.records || {}).forEach((record) => {
+    if (report.deletedMembers?.[record?.member]) return;
     if (record?.member) members.add(record.member);
   });
+  Object.keys(report.deletedMembers || {}).forEach((member) => members.delete(member));
   return Array.from(members).sort((a, b) => {
     const ai = (report.members || []).indexOf(a);
     const bi = (report.members || []).indexOf(b);
@@ -1569,6 +1579,8 @@ function renameRule(oldName, newName, weight) {
 }
 function renameMember(oldName, newName) {
   if (!newName || data.members.includes(newName)) return renderMemberQuotas();
+  delete data.deletedMembers?.[oldName];
+  delete data.deletedMembers?.[newName];
   data.members = data.members.map((name) => name === oldName ? newName : name);
   if (data.memberQuotas[oldName] !== undefined) {
     data.memberQuotas[newName] = data.memberQuotas[oldName];
@@ -1603,6 +1615,7 @@ function renameMember(oldName, newName) {
 function addMember(name, groupName = data.groups[0] || "1组") {
   if (!name || data.members.includes(name)) return;
   saveFormSilently();
+  delete data.deletedMembers?.[name];
   data.members.push(name);
   data.memberGroups[name] = groupName;
   data.memberItems[name] = configuredItems();
@@ -1615,13 +1628,18 @@ function addMember(name, groupName = data.groups[0] || "1组") {
 }
 function removeMember(name) {
   if (data.members.length <= 1) return alert("至少保留一个成员。");
-  if (!confirm(`确定删除成员“${name}”？历史记录会保留。`)) return;
+  if (!confirm(`确定删除成员“${name}”？会同时删除这个成员的历史记录、定额和分组配置。`)) return;
   data.members = data.members.filter((item) => item !== name);
+  data.deletedMembers = data.deletedMembers || {};
+  data.deletedMembers[name] = new Date().toISOString();
   delete data.memberQuotas[name];
   delete data.memberGroups[name];
   delete data.memberItems[name];
   Object.values(data.dailyQuotas || {}).forEach((entry) => {
     if (entry.members) delete entry.members[name];
+  });
+  Object.keys(data.records || {}).forEach((key) => {
+    if (data.records[key]?.member === name || key.endsWith(`|${name}`)) delete data.records[key];
   });
   if (currentMember === name) currentMember = data.members[0];
   loadForm();
