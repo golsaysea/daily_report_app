@@ -512,9 +512,9 @@ function scheduleDraftSave() {
 }
 function scheduleRecordCloudSave() {
   window.clearTimeout(recordCloudSaveTimer);
-  if (!appSessionPassword || !cloudDatabaseAvailable()) return;
+  if (!appSessionPassword && !fileHandle && !desktopApp?.isDesktop) return;
   recordCloudSaveTimer = window.setTimeout(() => {
-    saveCloudDatabaseData("records", true).catch(() => {});
+    persistEverywhere("records").catch(() => {});
   }, 1200);
 }
 function preserveActiveDraft() {
@@ -1275,6 +1275,7 @@ function checkinTimeText(value) {
 }
 function setCheckin(periodKey) {
   const now = new Date();
+  const updatedAt = now.toISOString();
   const rec = currentRecord();
   const next = sanitizeCheckins(rec.checkins || {});
   const status = normalizeCheckinStatus($(`checkinNote_${periodKey}`)?.value || "");
@@ -1284,10 +1285,15 @@ function setCheckin(periodKey) {
     next[periodKey] = {
       status,
       time: now.toLocaleTimeString("zh-CN", { hour12: false }),
-      iso: now.toISOString()
+      iso: updatedAt
     };
   }
-  rec.checkins = next;
+  Object.assign(rec, {
+    date: currentDate,
+    member: currentMember,
+    checkins: next,
+    updated_at: updatedAt
+  });
   persistLocal();
   scheduleRecordCloudSave();
   renderCheckins(rec.checkins);
