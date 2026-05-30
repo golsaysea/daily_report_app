@@ -137,8 +137,8 @@ input:focus, textarea:focus, select:focus { border-color: var(--green); box-shad
 .compact .sidebar { display: none; }
 .view { display: none; gap: 14px; }
 .view.active { display: grid; }
-#overviewView { overflow-x: auto; padding-bottom: 6px; }
-#overviewView > .panel, #overviewView > .overview-hero { min-width: min(760px, 100%); }
+#overviewView, #mixedView { overflow-x: auto; padding-bottom: 6px; }
+#overviewView > .panel, #overviewView > .overview-hero, #mixedView > .panel { min-width: min(760px, 100%); }
 .cards { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
 .metric, .panel, .overview-hero {
   background: var(--panel);

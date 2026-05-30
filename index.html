@@ -26,6 +26,7 @@
         <button class="tab active" data-view="entry">今日</button>
         <button class="tab" data-view="overview">整体预览</button>
         <button class="tab" data-view="timezones">时区管理</button>
+        <button class="tab" data-view="mixed">混合表格</button>
         <button class="tab" data-view="admin">管理员</button>
       </nav>
       <div class="actions">
@@ -135,21 +136,6 @@
               <div><span>总差额</span><strong id="teamDiff">0</strong></div>
             </div>
           </section>
-          <section class="panel">
-            <div class="panel-head"><h2>混合表格</h2><span class="hint" id="mixedTableHint"></span></div>
-            <div class="analysis-controls">
-              <select id="mixedTableGroup"></select>
-              <select id="mixedTableMember"></select>
-              <input id="mixedTableStart" type="date" aria-label="开始日期">
-              <input id="mixedTableEnd" type="date" aria-label="结束日期">
-            </div>
-            <div class="table-scroll mixed-table-wrap">
-              <table class="mixed-table">
-                <thead id="mixedTableHead"></thead>
-                <tbody id="mixedTableBody"></tbody>
-              </table>
-            </div>
-          </section>
           <section class="panel source-switch-panel">
             <div class="panel-head"><h2>查看范围</h2><span class="hint">高级管理员可切换多个来源文件夹</span></div>
             <div class="source-tabs" id="reportSourceTabs"></div>
@@ -242,6 +228,24 @@
               <thead><tr><th>日期</th><th>成员</th><th>原始</th><th>换算</th><th>状态</th><th>备注</th></tr></thead>
               <tbody id="historyBody"></tbody>
             </table>
+          </section>
+        </section>
+
+        <section class="view" id="mixedView">
+          <section class="panel">
+            <div class="panel-head"><h2>混合表格</h2><span class="hint" id="mixedTableHint"></span></div>
+            <div class="analysis-controls">
+              <select id="mixedTableGroup"></select>
+              <select id="mixedTableMember"></select>
+              <input id="mixedTableStart" type="date" aria-label="开始日期">
+              <input id="mixedTableEnd" type="date" aria-label="结束日期">
+            </div>
+            <div class="table-scroll mixed-table-wrap">
+              <table class="mixed-table">
+                <thead id="mixedTableHead"></thead>
+                <tbody id="mixedTableBody"></tbody>
+              </table>
+            </div>
           </section>
         </section>
 
