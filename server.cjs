@@ -45,6 +45,24 @@ function normalizeCheckinStatus(status) {
   return text;
 }
 
+function recordKeyParts(key = "") {
+  const [date = "", ...memberParts] = String(key || "").split("|");
+  return { date, member: memberParts.join("|") };
+}
+
+function normalizeRecordMap(records = {}) {
+  const normalized = {};
+  Object.entries(records || {}).forEach(([key, record]) => {
+    if (!record || typeof record !== "object") return;
+    const fallback = recordKeyParts(key);
+    const date = String(record.date || fallback.date || "").trim();
+    const member = String(record.member || fallback.member || "").trim();
+    if (!date || !member) return;
+    normalized[`${date}|${member}`] = { ...record, date, member };
+  });
+  return normalized;
+}
+
 function normalize(source) {
   const loaded = source && typeof source === "object" ? source : {};
   const data = { ...clone(defaultData), ...loaded };
@@ -60,7 +78,7 @@ function normalize(source) {
   data.checkinOptions = Array.isArray(data.checkinOptions) && data.checkinOptions.length
     ? Array.from(new Set(data.checkinOptions.map(normalizeCheckinStatus).filter(Boolean)))
     : clone(defaultData.checkinOptions);
-  data.records = data.records && typeof data.records === "object" ? data.records : {};
+  data.records = normalizeRecordMap(data.records && typeof data.records === "object" ? data.records : {});
   data.adminPassword = String(data.adminPassword || process.env.APP_PASSWORD || "999");
   data.updated_at = String(data.updated_at || "");
   data.members.forEach((member) => {
