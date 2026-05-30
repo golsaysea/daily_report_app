@@ -58,6 +58,7 @@ let mergedSourceDataset = null;
 let reportDataOverride = null;
 let overviewSelectedGroups = JSON.parse(localStorage.getItem("dailyReportOverviewGroups") || "[]");
 let analysisTableMember = "";
+let overviewRangeMode = "week";
 let overviewDetailGroup = "";
 let overviewDetailMember = "";
 let mixedTableGroup = "";
@@ -65,6 +66,7 @@ let mixedTableMember = "";
 let mixedTableRangeMode = "default";
 let checkinViewGroup = "";
 let checkinViewMember = "";
+let checkinViewRangeMode = "default";
 let pendingDialogField = "";
 let activeView = "entry";
 let saveTimer = 0;
@@ -189,13 +191,106 @@ function persistLocal() {
   pruneBackups();
   renderSyncPanel();
 }
-function newerRecord(a, b, prefer = "first") {
-  if (!a) return b;
-  if (!b) return a;
-  const left = String(a.updated_at || "");
-  const right = String(b.updated_at || "");
-  if (left === right) return prefer === "second" ? b : a;
-  return left > right ? a : b;
+function recordTimestamp(record) {
+  const time = Date.parse(record?.updated_at || "");
+  return Number.isNaN(time) ? 0 : time;
+}
+function newerRecordSide(a, b, prefer = "first") {
+  const left = recordTimestamp(a);
+  const right = recordTimestamp(b);
+  if (left === right) return prefer === "second" ? "second" : "first";
+  return left > right ? "first" : "second";
+}
+function mergeStringValue(aValue, bValue, aRecord, bRecord, prefer = "first") {
+  const left = String(aValue || "").trim();
+  const right = String(bValue || "").trim();
+  if (left && right) return newerRecordSide(aRecord, bRecord, prefer) === "second" ? bValue : aValue;
+  return right ? bValue : (left ? aValue : "");
+}
+function normalizeMergedCheckin(value) {
+  if (!value) return null;
+  const status = normalizeCheckinStatus(typeof value === "string" ? value : value.status || "");
+  if (!status) return null;
+  return typeof value === "object" ? { ...clone(value), status } : { status };
+}
+function checkinTimestamp(value, record) {
+  const source = typeof value === "object" ? (value.iso || value.updated_at || "") : "";
+  const time = Date.parse(source);
+  return Number.isNaN(time) ? recordTimestamp(record) : time;
+}
+function mergeRecordCheckins(aCheckins = {}, bCheckins = {}, aRecord = {}, bRecord = {}, prefer = "first") {
+  const merged = {};
+  const keys = new Set(["morning", "noon", "evening", ...Object.keys(aCheckins || {}), ...Object.keys(bCheckins || {})]);
+  keys.forEach((key) => {
+    const left = normalizeMergedCheckin(aCheckins?.[key]);
+    const right = normalizeMergedCheckin(bCheckins?.[key]);
+    if (left && right) {
+      const leftTime = checkinTimestamp(left, aRecord);
+      const rightTime = checkinTimestamp(right, bRecord);
+      const pickRight = leftTime === rightTime ? prefer === "second" : rightTime > leftTime;
+      merged[key] = pickRight ? right : left;
+    } else if (right) {
+      merged[key] = right;
+    } else if (left) {
+      merged[key] = left;
+    }
+  });
+  return merged;
+}
+function mergeRecordItems(aItems = {}, bItems = {}, aRecord = {}, bRecord = {}, prefer = "first") {
+  const merged = {};
+  const keys = new Set([...Object.keys(aItems || {}), ...Object.keys(bItems || {})]);
+  keys.forEach((key) => {
+    const left = Number(aItems?.[key] || 0);
+    const right = Number(bItems?.[key] || 0);
+    const hasLeft = left !== 0;
+    const hasRight = right !== 0;
+    if (hasLeft && hasRight) {
+      merged[key] = newerRecordSide(aRecord, bRecord, prefer) === "second" ? right : left;
+    } else if (hasRight) {
+      merged[key] = right;
+    } else if (hasLeft) {
+      merged[key] = left;
+    }
+  });
+  return merged;
+}
+function mergedEntryTotals(items, rules = {}) {
+  const raw = Object.values(items || {}).reduce((sum, amount) => sum + Number(amount || 0), 0);
+  const weighted = Object.entries(items || {}).reduce((sum, [name, amount]) => {
+    const weight = Number(rules?.[name] ?? 1);
+    return sum + Number(amount || 0) * (Number.isFinite(weight) ? weight : 1);
+  }, 0);
+  return { raw, weighted };
+}
+function mergedItemsToText(items) {
+  return Object.entries(items || {})
+    .filter(([, amount]) => Number(amount || 0) !== 0)
+    .map(([name, amount]) => `${name}：${Number(amount || 0)}`)
+    .join("\n");
+}
+function newerRecord(a, b, prefer = "first", rules = defaultData.rules) {
+  if (!a) return b ? clone(b) : b;
+  if (!b) return clone(a);
+  const primarySide = newerRecordSide(a, b, prefer);
+  const primary = primarySide === "second" ? b : a;
+  const secondary = primarySide === "second" ? a : b;
+  const merged = { ...clone(secondary), ...clone(primary) };
+  merged.date = primary.date || secondary.date || "";
+  merged.member = primary.member || secondary.member || "";
+  merged.items = mergeRecordItems(a.items || {}, b.items || {}, a, b, prefer);
+  merged.checkins = mergeRecordCheckins(a.checkins || {}, b.checkins || {}, a, b, prefer);
+  ["reason", "harvest", "diary"].forEach((field) => {
+    merged[field] = mergeStringValue(a[field], b[field], a, b, prefer);
+  });
+  merged.status = mergeStringValue(a.status, b.status, a, b, prefer) || "待审核";
+  merged.text = mergedItemsToText(merged.items) || mergeStringValue(a.text, b.text, a, b, prefer);
+  const totals = mergedEntryTotals(merged.items, rules);
+  merged.raw_total = totals.raw;
+  merged.weighted_total = totals.weighted;
+  merged.quota_total = Number(primary.quota_total ?? secondary.quota_total ?? 0);
+  merged.updated_at = [a.updated_at, b.updated_at].filter(Boolean).sort().pop() || primary.updated_at || secondary.updated_at || "";
+  return merged;
 }
 function mergeDailyQuotas(remoteDaily = {}, localDaily = {}, mode = "records") {
   const merged = {};
@@ -218,10 +313,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
   const remote = normalize(remoteSource);
   const local = normalize(localSource);
   const merged = mode === "admin" ? { ...remote, ...local } : { ...local, ...remote };
-  merged.records = { ...remote.records, ...local.records };
-  Object.keys(merged.records).forEach((key) => {
-    merged.records[key] = newerRecord(remote.records[key], local.records[key], "second");
-  });
+  const recordKeys = new Set([...Object.keys(remote.records || {}), ...Object.keys(local.records || {})]);
   if (mode === "admin") {
     merged.rules = clone(local.rules);
     merged.members = clone(local.members);
@@ -257,6 +349,10 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.deletedMembers = { ...(local.deletedMembers || {}), ...(remote.deletedMembers || {}) };
     merged.reviewMessages = clone(remote.reviewMessages || local.reviewMessages || defaultData.reviewMessages);
   }
+  merged.records = {};
+  recordKeys.forEach((key) => {
+    merged.records[key] = newerRecord(remote.records?.[key], local.records?.[key], "second", merged.rules);
+  });
   Object.keys(merged.records || {}).forEach((key) => {
     const member = merged.records[key]?.member || String(key).split("|").slice(1).join("|");
     if (merged.deletedMembers?.[member]) delete merged.records[key];
@@ -1105,6 +1201,33 @@ function weekRangeFor(dayKey) {
   const start = weekStartKey(dayKey);
   return { start, end: addDays(start, 6) };
 }
+function shiftMonthKey(monthKey, offset) {
+  const [year, month] = String(monthKey || monthKeyFromDateKey(currentDate)).split("-").map(Number);
+  const date = new Date(year, month - 1 + offset, 1);
+  return dateKeyFromDate(date).slice(0, 7);
+}
+function dateKeyForMonthDay(monthKey, day) {
+  const safeDay = Math.min(Math.max(1, Number(day) || 1), daysInMonth(monthKey));
+  return `${monthKey}-${String(safeDay).padStart(2, "0")}`;
+}
+function cutoffPeriodRange(dayKey, cutoffDay) {
+  const monthKey = monthKeyFromDateKey(dayKey);
+  const day = Number(String(dayKey || "").slice(8, 10)) || 1;
+  const endMonth = day <= cutoffDay ? monthKey : shiftMonthKey(monthKey, 1);
+  return {
+    start: dateKeyForMonthDay(shiftMonthKey(endMonth, -1), cutoffDay),
+    end: dateKeyForMonthDay(endMonth, cutoffDay)
+  };
+}
+function overviewRangeInfo() {
+  if (overviewRangeMode === "day") return { label: "今日", start: currentDate, end: currentDate };
+  if (overviewRangeMode === "small-month") return { label: "小月度汇总", ...cutoffPeriodRange(currentDate, 14) };
+  if (overviewRangeMode === "month") return { label: "月度汇总", ...cutoffPeriodRange(currentDate, 23) };
+  return { label: "本周", ...weekRangeFor(currentDate) };
+}
+function rangeText(range) {
+  return range.start === range.end ? range.start : `${range.start} 至 ${range.end}`;
+}
 function applyMixedTableDefaultRange() {
   const startInput = $("mixedTableStart");
   const endInput = $("mixedTableEnd");
@@ -1114,6 +1237,16 @@ function applyMixedTableDefaultRange() {
   startInput.value = range.start;
   endInput.value = range.end;
   mixedTableRangeMode = "default";
+}
+function applyCheckinDefaultRange() {
+  const startInput = $("checkinViewStart");
+  const endInput = $("checkinViewEnd");
+  if (!startInput || !endInput) return;
+  if (checkinViewRangeMode !== "default" && startInput.value && endInput.value) return;
+  const range = weekRangeFor(currentDate);
+  startInput.value = range.start;
+  endInput.value = range.end;
+  checkinViewRangeMode = "default";
 }
 function selectDate(nextDate, shouldSave = true) {
   if (!nextDate) return;
@@ -1285,6 +1418,28 @@ function currentRecord() {
   }
   data.records[recordKey()].checkins = sanitizeCheckins(data.records[recordKey()].checkins || {});
   return data.records[recordKey()];
+}
+function nonZeroItems(items = {}) {
+  return Object.fromEntries(Object.keys(items || {}).sort().map((name) => [name, Number(items[name] || 0)]).filter(([, amount]) => amount !== 0));
+}
+function sortedCheckins(checkins = {}) {
+  const cleaned = sanitizeCheckins(checkins || {});
+  return Object.fromEntries(Object.keys(cleaned).sort().map((key) => [key, cleaned[key]]));
+}
+function recordContentSnapshot(record = {}) {
+  return {
+    date: record.date || "",
+    member: record.member || "",
+    items: nonZeroItems(record.items || {}),
+    status: record.status || "",
+    reason: record.reason || "",
+    harvest: record.harvest || "",
+    diary: record.diary || "",
+    checkins: sortedCheckins(record.checkins || {})
+  };
+}
+function recordContentChanged(previous = {}, next = {}) {
+  return JSON.stringify(recordContentSnapshot(previous)) !== JSON.stringify(recordContentSnapshot(next));
 }
 function checkinPeriods() {
   return [
@@ -1498,7 +1653,7 @@ function saveFormSilently() {
   const selected = $("statusSelect").value;
   const rec = currentRecord();
   const finalStatus = selected === "自动判断" ? "待审核" : selected;
-  Object.assign(rec, {
+  const nextRecord = {
     date: currentDate,
     member: currentMember,
     text: itemsToText(items),
@@ -1512,10 +1667,12 @@ function saveFormSilently() {
     checkins: readCheckins(),
     items: parsed.items,
     updated_at: new Date().toISOString()
-  });
+  };
+  if (!recordContentChanged(rec, nextRecord)) return { rec, autoStatus, changed: false };
+  Object.assign(rec, nextRecord);
   persistLocal();
   scheduleRecordCloudSave();
-  return { rec, autoStatus };
+  return { rec, autoStatus, changed: true };
 }
 function pickReviewMessage(type) {
   const list = data.reviewMessages?.[type] || defaultData.reviewMessages[type];
@@ -1860,27 +2017,107 @@ function removeMember(name) {
   render();
   scheduleSave("admin");
 }
+function latestRecordText(records, fields = ["reason", "harvest", "diary"]) {
+  return records
+    .filter(Boolean)
+    .sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")))
+    .map((record) => fields.map((field) => record?.[field] || "").find(Boolean))
+    .find(Boolean) || "";
+}
+function aggregateMemberRange(member, days, report, itemNames) {
+  const records = days.map((day) => report.records?.[`${day}|${member}`]).filter(Boolean);
+  const items = Object.fromEntries(itemNames.map((name) => [name, 0]));
+  let raw = 0;
+  let weighted = 0;
+  let quota = 0;
+  let checkinCount = 0;
+  days.forEach((day) => {
+    const rec = report.records?.[`${day}|${member}`];
+    raw += Number(rec?.raw_total || 0);
+    weighted += Number(rec?.weighted_total || 0);
+    quota += memberQuota(member, day);
+    itemNames.forEach((name) => {
+      items[name] += Number(rec?.items?.[name] || 0);
+    });
+    checkinCount += checkinPeriods().filter((period) => checkinStatus(rec?.checkins?.[period.key])).length;
+  });
+  const checkinSlots = days.length * checkinPeriods().length;
+  const rate = quota > 0 ? Math.min(100, Math.round((weighted / quota) * 100)) : 100;
+  return {
+    member,
+    records,
+    items,
+    raw,
+    weighted,
+    quota,
+    diff: weighted - quota,
+    passed: weighted >= quota,
+    rate,
+    checkinCount,
+    checkinSlots,
+    note: latestRecordText(records)
+  };
+}
+function renderDetailSummaryGrid(containerId, itemTotals, stats) {
+  const box = $(containerId);
+  if (!box) return;
+  const itemEntries = Object.entries(itemTotals || {});
+  const maxItem = Math.max(...itemEntries.map(([, amount]) => Math.abs(Number(amount || 0))), 1);
+  const statCards = [
+    { label: "原始合计", value: fmt(stats.raw || 0) },
+    { label: "换算合计", value: fmt(stats.weighted || 0), strong: true },
+    { label: "周期定额", value: fmt(stats.quota || 0) },
+    { label: "总差额", value: `${(stats.diff || 0) >= 0 ? "+" : ""}${fmt(stats.diff || 0)}`, tone: (stats.diff || 0) >= 0 ? "good" : "bad" }
+  ].map((item) => `
+    <div class="item-total-card stat ${item.strong ? "featured" : ""} ${item.tone || ""}">
+      <span>${escapeHtml(item.label)}</span>
+      <strong>${escapeHtml(item.value)}</strong>
+    </div>
+  `).join("");
+  const itemCards = itemEntries.map(([name, amount]) => {
+    const width = Math.min(100, Math.round(Math.abs(Number(amount || 0)) / maxItem * 100));
+    return `
+      <div class="item-total-card">
+        <span>${escapeHtml(name)}</span>
+        <strong>${fmt(amount)}</strong>
+        <div class="item-total-bar"><i style="--w:${width}%"></i></div>
+      </div>
+    `;
+  }).join("");
+  box.innerHTML = statCards + (itemCards || `<div class="hint">这个范围还没有项目数据。</div>`);
+}
+function selectOverviewMember(member, report = reportData()) {
+  const group = report.memberGroups?.[member] || report.groups?.[0] || "__all__";
+  overviewDetailGroup = group;
+  overviewDetailMember = member;
+  checkinViewGroup = group;
+  checkinViewMember = member;
+  checkinViewRangeMode = "default";
+  if (data.members.includes(member)) {
+    currentMember = member;
+    loadForm();
+  }
+  if ($("analysisScope")) $("analysisScope").value = "member";
+  if ($("analysisGroup") && [...$("analysisGroup").options].some((option) => option.value === group)) $("analysisGroup").value = group;
+  if ($("analysisMember")) $("analysisMember").value = member;
+  renderOverview();
+}
 function renderOverview() {
   if (!reportDataOverride) return withReportData(selectedReportData(), renderOverview);
   const report = reportData();
   renderReportSourceTabs();
   renderOverviewGroupPicker(report);
-  if ($("overviewScopeHint")) $("overviewScopeHint").textContent = `当前查看：${selectedReportLabel()} · ${overviewGroupLabel(report)}`;
+  const range = overviewRangeInfo();
+  const days = buildDateRange(range.start, range.end);
+  if ($("overviewRangeSelect")) $("overviewRangeSelect").value = overviewRangeMode;
+  if ($("overviewRangeHint")) $("overviewRangeHint").textContent = `${range.label}：${rangeText(range)} · ${days.length} 天`;
+  if ($("overviewScopeHint")) $("overviewScopeHint").textContent = `当前查看：${selectedReportLabel()} · ${overviewGroupLabel(report)} · ${range.label}`;
   $("overviewDateInput").value = currentDate;
   const itemNames = configuredItems();
   const selectedGroups = selectedOverviewGroups(report);
   const selectedGroupSet = new Set(selectedGroups);
   const visibleGroups = report.groups.filter((group) => selectedGroupSet.has(group));
-  const allRows = reportMembers(report).map((member) => {
-    const rec = report.records[`${currentDate}|${member}`];
-    const quota = memberQuota(member, currentDate);
-    const weighted = Number(rec?.weighted_total || 0);
-    const status = rec?.status || "待审核";
-    const passed = status === "达标" || weighted >= quota;
-    const rate = quota > 0 ? Math.min(100, Math.round((weighted / quota) * 100)) : 100;
-    const items = rec?.items || {};
-    return { member, rec, quota, weighted, passed, rate, items, checkins: rec?.checkins || {} };
-  });
+  const allRows = reportMembers(report).map((member) => aggregateMemberRange(member, days, report, itemNames));
   const rows = allRows.filter((row) => selectedGroupSet.has(report.memberGroups?.[row.member] || report.groups[0]));
   const pass = rows.filter((row) => row.passed).length;
   const fail = rows.length - pass;
@@ -1891,25 +2128,26 @@ function renderOverview() {
     totals[name] = rows.reduce((sum, row) => sum + Number(row.items[name] || 0), 0);
     return totals;
   }, {});
-  $("overviewTitle").textContent = `${currentDate} ${overviewGroupLabel(report)}达标情况`;
+  $("overviewTitle").textContent = `${range.label} ${overviewGroupLabel(report)}达标情况`;
   $("passCount").textContent = String(pass);
   $("failCount").textContent = String(fail);
   $("passRate").textContent = rows.length ? `${Math.round(pass / rows.length * 100)}%` : "0%";
+  if ($("passRateDetail")) $("passRateDetail").textContent = `${pass} / ${rows.length} 位成员达标`;
   $("teamTotal").textContent = fmt(totalWeighted);
   $("teamQuota").textContent = `${fmt(totalQuota)} ${teamPassed ? "✓" : ""}`;
   $("teamDiff").textContent = `${totalWeighted - totalQuota >= 0 ? "+" : ""}${fmt(totalWeighted - totalQuota)}`;
-  $("overviewHint").textContent = `${overviewGroupLabel(report)} · ${rows.length} 位成员 · ${teamPassed ? "已完成" : "未完成"}总定额`;
+  $("overviewHint").textContent = `${rangeText(range)} · ${rows.length} 位成员 · ${teamPassed ? "已完成" : "未完成"}总定额`;
   const rowCard = (row) => `
-    <article class="person-card ${row.passed ? "pass" : "fail"}" data-overview-member="${escapeAttr(row.member)}" title="点击查看个人今日">
+    <article class="person-card ${row.passed ? "pass" : "fail"}" data-overview-member="${escapeAttr(row.member)}" title="点击切换这个成员的明细和打卡">
       <div class="person-top">
         <span>${escapeHtml(row.member)}</span>
         <span class="status ${row.passed ? "pass" : "fail"}">${row.passed ? "达标" : "未达"}</span>
       </div>
       <div class="progress" title="${row.rate}%"><span style="--w:${row.rate}%"></span></div>
       <div class="hint">换算 ${fmt(row.weighted)} / 定额 ${fmt(row.quota)}</div>
-      <div class="hint">差额 ${row.weighted - row.quota >= 0 ? "+" : ""}${fmt(row.weighted - row.quota)}</div>
-      <div class="hint">${escapeHtml(checkinSummary(row.checkins))}</div>
-      <div class="hint">${escapeHtml(row.rec?.reason || row.rec?.harvest || "暂无备注")}</div>
+      <div class="hint">差额 ${row.diff >= 0 ? "+" : ""}${fmt(row.diff)}</div>
+      <div class="hint">打卡 ${row.checkinCount}/${row.checkinSlots}</div>
+      <div class="hint">${escapeHtml(row.note || "暂无备注")}</div>
     </article>
   `;
   $("overviewGrid").innerHTML = visibleGroups.map((group) => {
@@ -1928,13 +2166,7 @@ function renderOverview() {
   }).join("");
   $("overviewGrid").querySelectorAll("[data-overview-member]").forEach((card) => {
     card.onclick = () => {
-      if (!data.members.includes(card.dataset.overviewMember)) {
-        showDialog("汇总成员", "这个成员来自高级管理员汇总视图。请切回对应来源文件夹后再编辑个人记录。", "");
-        return;
-      }
-      currentMember = card.dataset.overviewMember;
-      loadForm();
-      setView("entry");
+      selectOverviewMember(card.dataset.overviewMember, report);
     };
   });
   const detailPick = renderGroupMemberSelectors("overviewDetailGroup", "overviewDetailMember", overviewDetailGroup, overviewDetailMember);
@@ -1946,43 +2178,17 @@ function renderOverview() {
     totals[name] = detailSourceRows.reduce((sum, row) => sum + Number(row.items[name] || 0), 0);
     return totals;
   }, {});
-  const detailRaw = detailSourceRows.reduce((sum, row) => sum + Number(row.rec?.raw_total || 0), 0);
+  const detailRaw = detailSourceRows.reduce((sum, row) => sum + row.raw, 0);
   const detailWeighted = detailSourceRows.reduce((sum, row) => sum + row.weighted, 0);
   const detailQuota = detailSourceRows.reduce((sum, row) => sum + row.quota, 0);
-  const detailPassed = detailWeighted >= detailQuota;
   const detailLabel = overviewDetailMember || (overviewDetailGroup === "__all__" ? "全部成员合计" : `${overviewDetailGroup}全部成员`);
-  $("detailHint").textContent = `${detailLabel}：${itemNames.map((name) => `${name} ${fmt(detailTotals[name])}`).join(" · ")}`;
-  $("detailHead").innerHTML = `
-    <tr>
-      <th>成员</th>
-      ${itemNames.map((name) => `<th>${escapeHtml(name)}</th>`).join("")}
-      <th>原始</th>
-      <th>换算</th>
-      <th>定额</th>
-      <th>差额</th>
-      <th>状态</th>
-      <th>打卡</th>
-      <th>备注</th>
-    </tr>
-  `;
-  const detailRows = [
-    { label: `${overviewGroupLabel(report)}合计`, items: itemTotals, raw: rows.reduce((sum, row) => sum + Number(row.rec?.raw_total || 0), 0), weighted: totalWeighted, quota: totalQuota, diff: totalWeighted - totalQuota, status: teamPassed ? "完成" : "未完成", checkins: "", note: "" },
-    { label: detailLabel, items: detailTotals, raw: detailRaw, weighted: detailWeighted, quota: detailQuota, diff: detailWeighted - detailQuota, status: detailPassed ? "完成" : "未完成", checkins: "", note: "" },
-    ...detailSourceRows.map((row) => ({ label: row.member, items: row.items, raw: Number(row.rec?.raw_total || 0), weighted: row.weighted, quota: row.quota, diff: row.weighted - row.quota, status: row.passed ? "达标" : "未达", checkins: checkinSummary(row.checkins), note: row.rec?.reason || row.rec?.harvest || "" }))
-  ].filter(Boolean);
-  $("detailBody").innerHTML = detailRows.map((row) => `
-    <tr>
-      <td>${escapeHtml(row.label)}</td>
-      ${itemNames.map((name) => `<td>${fmt(row.items[name] || 0)}</td>`).join("")}
-      <td>${fmt(row.raw || 0)}</td>
-      <td>${fmt(row.weighted)}</td>
-      <td>${fmt(row.quota)}</td>
-      <td>${row.diff >= 0 ? "+" : ""}${fmt(row.diff)}</td>
-      <td>${escapeHtml(row.status)}</td>
-      <td>${escapeHtml(row.checkins)}</td>
-      <td>${escapeHtml(row.note)}</td>
-    </tr>
-  `).join("");
+  $("detailHint").textContent = `${detailLabel} · ${rangeText(range)} · 只显示合计`;
+  renderDetailSummaryGrid("detailSummaryGrid", detailTotals, {
+    raw: detailRaw,
+    weighted: detailWeighted,
+    quota: detailQuota,
+    diff: detailWeighted - detailQuota
+  });
   renderMixedOverviewTable();
   renderCheckinOverview();
   renderAnalytics();
@@ -2157,8 +2363,7 @@ function renderCheckinOverview() {
   const pick = renderGroupMemberSelectors("checkinViewGroup", "checkinViewMember", checkinViewGroup, checkinViewMember);
   checkinViewGroup = pick.group;
   checkinViewMember = pick.member;
-  if (!$("checkinViewStart").value) $("checkinViewStart").value = `${currentDate.slice(0, 7)}-01`;
-  if (!$("checkinViewEnd").value) $("checkinViewEnd").value = currentDate;
+  applyCheckinDefaultRange();
   let start = $("checkinViewStart").value || currentDate;
   let end = $("checkinViewEnd").value || currentDate;
   if (start > end) {
@@ -2179,13 +2384,16 @@ function renderCheckinOverview() {
         <tr>
           <td>${escapeHtml(day)}</td>
           <td>${escapeHtml(group)}</td>
-          <td>${escapeHtml(member)}</td>
+          <td><button class="table-link" data-checkin-member="${escapeAttr(member)}" data-checkin-group="${escapeAttr(group)}">${escapeHtml(member)}</button></td>
           ${checkinPeriods().map((period) => `<td>${escapeHtml(checkinDisplay(rec?.checkins?.[period.key]))}</td>`).join("")}
         </tr>
       `);
     });
   });
   $("checkinBody").innerHTML = rows.join("") || `<tr><td colspan="6" class="hint">暂无打卡记录。</td></tr>`;
+  $("checkinBody").querySelectorAll("[data-checkin-member]").forEach((button) => {
+    button.onclick = () => selectOverviewMember(button.dataset.checkinMember || "", report);
+  });
 }
 function renderAnalysisMemberOptions() {
   const report = reportData();
@@ -2925,6 +3133,10 @@ function bindEvents() {
   $("overviewDateInput").onchange = () => {
     selectDate($("overviewDateInput").value || todayLocalKey());
   };
+  $("overviewRangeSelect").onchange = () => {
+    overviewRangeMode = $("overviewRangeSelect").value || "week";
+    renderOverview();
+  };
   ["monthInput", "overviewMonthInput"].forEach((id) => {
     $(id).onchange = () => selectDate(sameDayInMonth($(id).value || monthKeyFromDateKey(currentDate)));
   });
@@ -3023,10 +3235,16 @@ function bindEvents() {
       renderMixedOverviewTable();
     };
   });
-  ["checkinViewGroup", "checkinViewMember", "checkinViewStart", "checkinViewEnd"].forEach((id) => {
+  ["checkinViewGroup", "checkinViewMember"].forEach((id) => {
     $(id).onchange = () => {
       checkinViewGroup = $("checkinViewGroup").value;
       checkinViewMember = $("checkinViewMember").value;
+      renderCheckinOverview();
+    };
+  });
+  ["checkinViewStart", "checkinViewEnd"].forEach((id) => {
+    $(id).onchange = () => {
+      checkinViewRangeMode = $("checkinViewStart").value || $("checkinViewEnd").value ? "custom" : "default";
       renderCheckinOverview();
     };
   });

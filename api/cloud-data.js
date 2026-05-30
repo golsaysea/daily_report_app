@@ -132,13 +132,115 @@ function normalize(source) {
   };
 }
 
-function newerRecord(a, b, prefer = "first") {
-  if (!a) return b;
-  if (!b) return a;
-  const left = String(a.updated_at || "");
-  const right = String(b.updated_at || "");
-  if (left === right) return prefer === "second" ? b : a;
-  return left > right ? a : b;
+function recordTimestamp(record) {
+  const time = Date.parse(record?.updated_at || "");
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function newerRecordSide(a, b, prefer = "first") {
+  const left = recordTimestamp(a);
+  const right = recordTimestamp(b);
+  if (left === right) return prefer === "second" ? "second" : "first";
+  return left > right ? "first" : "second";
+}
+
+function mergeStringValue(aValue, bValue, aRecord, bRecord, prefer = "first") {
+  const left = String(aValue || "").trim();
+  const right = String(bValue || "").trim();
+  if (left && right) return newerRecordSide(aRecord, bRecord, prefer) === "second" ? bValue : aValue;
+  return right ? bValue : (left ? aValue : "");
+}
+
+function normalizeMergedCheckin(value) {
+  if (!value) return null;
+  const status = normalizeCheckinStatus(typeof value === "string" ? value : value.status || "");
+  if (!status) return null;
+  return typeof value === "object" ? { ...clone(value), status } : { status };
+}
+
+function checkinTimestamp(value, record) {
+  const source = typeof value === "object" ? (value.iso || value.updated_at || "") : "";
+  const time = Date.parse(source);
+  return Number.isNaN(time) ? recordTimestamp(record) : time;
+}
+
+function mergeRecordCheckins(aCheckins = {}, bCheckins = {}, aRecord = {}, bRecord = {}, prefer = "first") {
+  const merged = {};
+  const keys = new Set(["morning", "noon", "evening", ...Object.keys(aCheckins || {}), ...Object.keys(bCheckins || {})]);
+  keys.forEach((key) => {
+    const left = normalizeMergedCheckin(aCheckins?.[key]);
+    const right = normalizeMergedCheckin(bCheckins?.[key]);
+    if (left && right) {
+      const leftTime = checkinTimestamp(left, aRecord);
+      const rightTime = checkinTimestamp(right, bRecord);
+      const pickRight = leftTime === rightTime ? prefer === "second" : rightTime > leftTime;
+      merged[key] = pickRight ? right : left;
+    } else if (right) {
+      merged[key] = right;
+    } else if (left) {
+      merged[key] = left;
+    }
+  });
+  return merged;
+}
+
+function mergeRecordItems(aItems = {}, bItems = {}, aRecord = {}, bRecord = {}, prefer = "first") {
+  const merged = {};
+  const keys = new Set([...Object.keys(aItems || {}), ...Object.keys(bItems || {})]);
+  keys.forEach((key) => {
+    const left = Number(aItems?.[key] || 0);
+    const right = Number(bItems?.[key] || 0);
+    const hasLeft = left !== 0;
+    const hasRight = right !== 0;
+    if (hasLeft && hasRight) {
+      merged[key] = newerRecordSide(aRecord, bRecord, prefer) === "second" ? right : left;
+    } else if (hasRight) {
+      merged[key] = right;
+    } else if (hasLeft) {
+      merged[key] = left;
+    }
+  });
+  return merged;
+}
+
+function mergedEntryTotals(items, rules = {}) {
+  const raw = Object.values(items || {}).reduce((sum, amount) => sum + Number(amount || 0), 0);
+  const weighted = Object.entries(items || {}).reduce((sum, [name, amount]) => {
+    const weight = Number(rules?.[name] ?? 1);
+    return sum + Number(amount || 0) * (Number.isFinite(weight) ? weight : 1);
+  }, 0);
+  return { raw, weighted };
+}
+
+function mergedItemsToText(items) {
+  return Object.entries(items || {})
+    .filter(([, amount]) => Number(amount || 0) !== 0)
+    .map(([name, amount]) => `${name}：${Number(amount || 0)}`)
+    .join("\n");
+}
+
+function newerRecord(a, b, prefer = "first", rules = defaultData.rules) {
+  if (!a) return b ? clone(b) : b;
+  if (!b) return clone(a);
+  const primarySide = newerRecordSide(a, b, prefer);
+  const primary = primarySide === "second" ? b : a;
+  const secondary = primarySide === "second" ? a : b;
+  const merged = { ...clone(secondary), ...clone(primary) };
+  merged.date = primary.date || secondary.date || "";
+  merged.member = primary.member || secondary.member || "";
+  merged.items = mergeRecordItems(a.items || {}, b.items || {}, a, b, prefer);
+  merged.checkins = mergeRecordCheckins(a.checkins || {}, b.checkins || {}, a, b, prefer);
+  ["reason", "harvest", "diary"].forEach((field) => {
+    merged[field] = mergeStringValue(a[field], b[field], a, b, prefer);
+  });
+  merged.status = mergeStringValue(a.status, b.status, a, b, prefer) || "待审核";
+  merged.text = mergedItemsToText(merged.items) || mergeStringValue(a.text, b.text, a, b, prefer);
+  const totals = mergedEntryTotals(merged.items, rules);
+  merged.raw_total = totals.raw;
+  merged.weighted_total = totals.weighted;
+  merged.quota_total = Number(primary.quota_total ?? secondary.quota_total ?? 0);
+  merged.updated_at = [a.updated_at, b.updated_at].filter(Boolean).sort().pop() || primary.updated_at || secondary.updated_at || "";
+  return merged;
 }
 
 function mergeDailyQuotas(remoteDaily = {}, localDaily = {}, mode = "records") {
@@ -163,10 +265,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
   const remote = normalize(remoteSource);
   const local = normalize(localSource);
   const merged = mode === "admin" ? { ...remote, ...local } : { ...local, ...remote };
-  merged.records = { ...remote.records, ...local.records };
-  Object.keys(merged.records).forEach((key) => {
-    merged.records[key] = newerRecord(remote.records[key], local.records[key], "second");
-  });
+  const recordKeys = new Set([...Object.keys(remote.records || {}), ...Object.keys(local.records || {})]);
   if (mode === "admin") {
     merged.rules = clone(local.rules);
     merged.members = clone(local.members);
@@ -202,6 +301,10 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.deletedMembers = { ...(local.deletedMembers || {}), ...(remote.deletedMembers || {}) };
     merged.reviewMessages = clone(remote.reviewMessages || local.reviewMessages || defaultData.reviewMessages);
   }
+  merged.records = {};
+  recordKeys.forEach((key) => {
+    merged.records[key] = newerRecord(remote.records?.[key], local.records?.[key], "second", merged.rules);
+  });
   Object.keys(merged.records || {}).forEach((key) => {
     const member = merged.records[key]?.member || String(key).split("|").slice(1).join("|");
     if (merged.deletedMembers?.[member]) delete merged.records[key];

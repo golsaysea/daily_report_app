@@ -116,24 +116,34 @@
             </div>
             <div class="overview-date">
               <input class="hidden" id="overviewDateInput" type="date">
+              <select id="overviewRangeSelect" aria-label="选择整体预览范围">
+                <option value="week">本周</option>
+                <option value="small-month">小月度汇总</option>
+                <option value="month">月度汇总</option>
+                <option value="day">今日</option>
+              </select>
               <div class="month-nav">
                 <button id="overviewPrevMonthBtn" type="button" title="上个月">‹</button>
                 <input id="overviewMonthInput" type="month" aria-label="选择月份">
                 <button id="overviewNextMonthBtn" type="button" title="下个月">›</button>
               </div>
               <div class="week-strip" id="overviewWeekStrip"></div>
+              <small class="hint" id="overviewRangeHint"></small>
               <div class="group-multi" id="overviewGroupPicker">
                 <button id="overviewGroupToggle" type="button">全部分组</button>
                 <div class="group-multi-menu" id="overviewGroupMenu"></div>
               </div>
             </div>
             <div class="overview-stats">
-              <div><span>达标</span><strong id="passCount">0</strong></div>
-              <div><span>未达标</span><strong id="failCount">0</strong></div>
-              <div><span>完成率</span><strong id="passRate">0%</strong></div>
-              <div><span>小组合计</span><strong id="teamTotal">0</strong></div>
-              <div><span>总定额</span><strong id="teamQuota">0</strong></div>
-              <div><span>总差额</span><strong id="teamDiff">0</strong></div>
+              <div class="overview-stat-card"><span>达标</span><strong id="passCount">0</strong></div>
+              <div class="overview-stat-card"><span>未达标</span><strong id="failCount">0</strong></div>
+              <details class="overview-stat-card overview-rate-card">
+                <summary><span>完成率</span><strong id="passRate">0%</strong></summary>
+                <small id="passRateDetail">0 / 0 位成员</small>
+              </details>
+              <div class="overview-stat-card featured"><span>小组合计</span><strong id="teamTotal">0</strong></div>
+              <div class="overview-stat-card"><span>总定额</span><strong id="teamQuota">0</strong></div>
+              <div class="overview-stat-card"><span>总差额</span><strong id="teamDiff">0</strong></div>
             </div>
           </section>
           <section class="panel source-switch-panel">
@@ -150,14 +160,9 @@
               <select id="overviewDetailGroup"></select>
               <select id="overviewDetailMember"></select>
             </div>
-            <div class="table-scroll">
-              <table>
-                <thead id="detailHead"></thead>
-                <tbody id="detailBody"></tbody>
-              </table>
-            </div>
+            <div class="item-total-grid" id="detailSummaryGrid"></div>
           </section>
-          <details class="panel overview-group" open>
+          <details class="panel overview-group">
             <summary><span>打卡情况</span><strong id="checkinOverviewHint"></strong></summary>
             <div class="analysis-controls">
               <select id="checkinViewGroup"></select>
