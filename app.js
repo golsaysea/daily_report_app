@@ -60,6 +60,8 @@ let overviewSelectedGroups = JSON.parse(localStorage.getItem("dailyReportOvervie
 let analysisTableMember = "";
 let overviewDetailGroup = "";
 let overviewDetailMember = "";
+let mixedTableGroup = "";
+let mixedTableMember = "";
 let checkinViewGroup = "";
 let checkinViewMember = "";
 let pendingDialogField = "";
@@ -1933,6 +1935,7 @@ function renderOverview() {
       <td>${escapeHtml(row.note)}</td>
     </tr>
   `).join("");
+  renderMixedOverviewTable();
   renderCheckinOverview();
   renderAnalytics();
 }
@@ -1951,6 +1954,87 @@ function renderHistory() {
       <td>${escapeHtml(r.reason || r.harvest || "")}</td>
     </tr>
   `).join("") || `<tr><td colspan="6" class="hint">还没有历史记录。</td></tr>`;
+}
+function renderMixedOverviewTable() {
+  const report = reportData();
+  if (!$("mixedTableHead")) return;
+  const pick = renderGroupMemberSelectors("mixedTableGroup", "mixedTableMember", mixedTableGroup, mixedTableMember, true, false);
+  mixedTableGroup = pick.group;
+  mixedTableMember = pick.member;
+  if (!$("mixedTableStart").value) $("mixedTableStart").value = `${currentDate.slice(0, 7)}-01`;
+  if (!$("mixedTableEnd").value) $("mixedTableEnd").value = currentDate;
+  let start = $("mixedTableStart").value || currentDate;
+  let end = $("mixedTableEnd").value || currentDate;
+  if (start > end) {
+    [start, end] = [end, start];
+    $("mixedTableStart").value = start;
+    $("mixedTableEnd").value = end;
+  }
+  const member = mixedTableMember || membersForGroupValue(mixedTableGroup, report)[0] || "";
+  mixedTableMember = member;
+  if ($("mixedTableMember") && member) $("mixedTableMember").value = member;
+  const days = buildDateRange(start, end);
+  const itemNames = configuredItems();
+  const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
+  let totalWeighted = 0;
+  let totalQuota = 0;
+  $("mixedTableHint").textContent = member ? `${member} · ${start} 至 ${end} · 打卡和报数合并查看` : "请选择成员";
+  $("mixedTableHead").innerHTML = `
+    <tr>
+      <th>日期</th>
+      ${checkinPeriods().map((period) => `<th>${period.label}打卡</th>`).join("")}
+      ${itemNames.map((name) => `<th>${escapeHtml(name)}</th>`).join("")}
+      <th>完成</th>
+      <th>定额</th>
+      <th>差额</th>
+      <th>备注</th>
+    </tr>
+  `;
+  if (!member) {
+    $("mixedTableBody").innerHTML = `<tr><td colspan="${5 + checkinPeriods().length + itemNames.length}" class="hint">暂无可查看成员。</td></tr>`;
+    return;
+  }
+  const rows = days.map((day) => {
+    const rec = report.records?.[`${day}|${member}`];
+    const items = rec?.items || {};
+    const weighted = Number(rec?.weighted_total || 0);
+    const quota = memberQuota(member, day);
+    totalWeighted += weighted;
+    totalQuota += quota;
+    itemNames.forEach((name) => {
+      itemTotals[name] += Number(items[name] || 0);
+    });
+    const diff = weighted - quota;
+    return `
+      <tr>
+        <td class="mixed-date">${escapeHtml(day.slice(5))}</td>
+        ${checkinPeriods().map((period) => {
+          const value = rec?.checkins?.[period.key];
+          const status = checkinStatus(value);
+          const time = checkinTimeText(value).replace("记录时间 ", "");
+          return `<td class="mixed-checkin ${status ? "filled" : ""}" title="${escapeAttr(checkinDisplay(value))}"><span>${escapeHtml(status || "")}</span>${time ? `<small>${escapeHtml(time)}</small>` : ""}</td>`;
+        }).join("")}
+        ${itemNames.map((name) => `<td class="${Number(items[name] || 0) ? "mixed-number" : ""}">${Number(items[name] || 0) ? fmt(items[name]) : ""}</td>`).join("")}
+        <td class="mixed-total">${weighted ? fmt(weighted) : ""}</td>
+        <td>${fmt(quota)}</td>
+        <td class="${diff >= 0 ? "mixed-good" : "mixed-bad"}">${diff >= 0 ? "+" : ""}${fmt(diff)}</td>
+        <td class="mixed-note">${escapeHtml(rec?.reason || rec?.harvest || rec?.diary || "")}</td>
+      </tr>
+    `;
+  });
+  const totalDiff = totalWeighted - totalQuota;
+  rows.unshift(`
+    <tr class="mixed-summary-row">
+      <th>合计</th>
+      ${checkinPeriods().map(() => `<th></th>`).join("")}
+      ${itemNames.map((name) => `<th>${fmt(itemTotals[name])}</th>`).join("")}
+      <th>${fmt(totalWeighted)}</th>
+      <th>${fmt(totalQuota)}</th>
+      <th class="${totalDiff >= 0 ? "mixed-good" : "mixed-bad"}">${totalDiff >= 0 ? "+" : ""}${fmt(totalDiff)}</th>
+      <th></th>
+    </tr>
+  `);
+  $("mixedTableBody").innerHTML = rows.join("");
 }
 function renderCheckinOverview() {
   const report = reportData();
@@ -2809,6 +2893,13 @@ function bindEvents() {
       overviewDetailGroup = $("overviewDetailGroup").value;
       overviewDetailMember = $("overviewDetailMember").value;
       renderOverview();
+    };
+  });
+  ["mixedTableGroup", "mixedTableMember", "mixedTableStart", "mixedTableEnd"].forEach((id) => {
+    $(id).onchange = () => {
+      mixedTableGroup = $("mixedTableGroup").value;
+      mixedTableMember = $("mixedTableMember").value;
+      renderMixedOverviewTable();
     };
   });
   ["checkinViewGroup", "checkinViewMember", "checkinViewStart", "checkinViewEnd"].forEach((id) => {
