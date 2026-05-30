@@ -10,10 +10,15 @@
   memberItems: {},
   memberQuotas: {},
   dailyQuotas: {},
-  checkinOptions: ["上线", "请假", "熬夜迟到", "听交通", "聚会", "上班", "干农活", "值日"],
+  checkinOptions: ["上线", "请假", "迟到", "听交通", "聚会", "上班", "干农活", "值日", "熬夜", "拍摄"],
   timezones: [
-    { name: "北京时间", offset: "+08:00" },
-    { name: "罗马时间", offset: "+02:00" }
+    { name: "澳大利亚时间", offset: "+10:00" },
+    { name: "新西兰时间", offset: "+12:00" },
+    { name: "欧洲时间", offset: "+01:00" },
+    { name: "希腊时间", offset: "+03:00" },
+    { name: "柬埔寨时间", offset: "+07:00" },
+    { name: "美国时间", offset: "-05:00" },
+    { name: "洛杉矶时间", offset: "-07:00" },
   ],
   adminPassword: "999",
   sheetBackupEnabled: true,
@@ -88,7 +93,7 @@ function todayLocalKey() {
 function normalizeCheckinStatus(status) {
   const text = String(status || "").trim();
   if (text === "准时上线") return "上线";
-  if (text === "迟到") return "熬夜迟到";
+  if (text === "迟到") return "迟到";
   return text;
 }
 function normalizeCheckinOptions(options) {
