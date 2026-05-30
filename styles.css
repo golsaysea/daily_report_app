@@ -171,6 +171,20 @@ th { background: #e9efe3; font-weight: 900; }
 tr:last-child td { border-bottom: 0; }
 .table-scroll { width: 100%; overflow-x: auto; border-radius: 8px; }
 .table-scroll table { min-width: 760px; }
+.mixed-table { min-width: 1120px; table-layout: auto; }
+.mixed-table th { background: #df6363; color: white; text-align: center; white-space: nowrap; }
+.mixed-table td { background: #fde7e7; text-align: center; min-width: 58px; }
+.mixed-table .mixed-date { position: sticky; left: 0; z-index: 1; background: #fff7f7; font-weight: 900; }
+.mixed-table .mixed-checkin { min-width: 66px; padding: 5px 6px; }
+.mixed-table .mixed-checkin.filled { background: #63d878; color: #063f16; font-weight: 900; }
+.mixed-table .mixed-checkin span { display: block; line-height: 1.2; }
+.mixed-table .mixed-checkin small { display: block; margin-top: 2px; font-size: 10px; color: inherit; opacity: .75; }
+.mixed-table .mixed-number { background: #fff3f3; font-weight: 900; }
+.mixed-table .mixed-total { background: #e98686; color: #160303; font-weight: 900; }
+.mixed-table .mixed-good { background: #8ee09a; color: #064315; font-weight: 900; }
+.mixed-table .mixed-bad { background: #f0a3a3; color: #6b0e0e; font-weight: 900; }
+.mixed-table .mixed-note { min-width: 220px; max-width: 340px; text-align: left; white-space: normal; background: #fff4f4; }
+.mixed-table .mixed-summary-row th { background: #d85252; color: white; }
 .rule-row, .quota-row { display: grid; grid-template-columns: 1fr 110px 38px; gap: 8px; align-items: center; margin-bottom: 8px; }
 .quota-row { grid-template-columns: minmax(120px, 1fr) 110px 110px 38px; }
 .quota-edit input { width: 100%; min-width: 120px; border: 0; background: transparent; font: inherit; font-weight: 900; color: inherit; outline: 0; }
