@@ -43,6 +43,28 @@ function normalizeCheckinOptions(options) {
   return Array.from(new Set(source.map(normalizeCheckinStatus).filter(Boolean)));
 }
 
+function recordKeyParts(key = "") {
+  const [date = "", ...memberParts] = String(key || "").split("|");
+  return { date, member: memberParts.join("|") };
+}
+
+function normalizeRecordMap(records = {}, rules = defaultData.rules) {
+  const normalized = {};
+  Object.entries(records || {}).forEach(([key, record]) => {
+    if (!record || typeof record !== "object") return;
+    const fallback = recordKeyParts(key);
+    const date = String(record.date || fallback.date || "").trim();
+    const member = String(record.member || fallback.member || "").trim();
+    if (!date || !member) return;
+    const next = { ...clone(record), date, member };
+    const nextKey = `${date}|${member}`;
+    normalized[nextKey] = normalized[nextKey]
+      ? newerRecord(normalized[nextKey], next, "second", rules)
+      : next;
+  });
+  return normalized;
+}
+
 function send(res, statusCode, payload) {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -128,7 +150,7 @@ function normalize(source) {
       pass: Array.isArray(loaded.reviewMessages?.pass) ? loaded.reviewMessages.pass : clone(defaultData.reviewMessages.pass),
       fail: Array.isArray(loaded.reviewMessages?.fail) ? loaded.reviewMessages.fail : clone(defaultData.reviewMessages.fail)
     },
-    records: loaded.records && typeof loaded.records === "object" ? loaded.records : {}
+    records: normalizeRecordMap(loaded.records && typeof loaded.records === "object" ? loaded.records : {}, rules)
   };
 }
 

@@ -58,7 +58,7 @@ let mergedSourceDataset = null;
 let reportDataOverride = null;
 let overviewSelectedGroups = JSON.parse(localStorage.getItem("dailyReportOverviewGroups") || "[]");
 let analysisTableMember = "";
-let overviewRangeMode = "week";
+let overviewRangeMode = "day";
 let overviewDetailGroup = "";
 let overviewDetailMember = "";
 let mixedTableGroup = "";
@@ -94,6 +94,26 @@ function normalizeCheckinStatus(status) {
 function normalizeCheckinOptions(options) {
   const source = Array.isArray(options) && options.length ? options : defaultData.checkinOptions;
   return Array.from(new Set(source.map(normalizeCheckinStatus).filter(Boolean)));
+}
+function recordKeyParts(key = "") {
+  const [date = "", ...memberParts] = String(key || "").split("|");
+  return { date, member: memberParts.join("|") };
+}
+function normalizeRecordMap(records = {}, rules = defaultData.rules) {
+  const normalized = {};
+  Object.entries(records || {}).forEach(([key, record]) => {
+    if (!record || typeof record !== "object") return;
+    const fallback = recordKeyParts(key);
+    const date = String(record.date || fallback.date || "").trim();
+    const member = String(record.member || fallback.member || "").trim();
+    if (!date || !member) return;
+    const next = { ...clone(record), date, member };
+    const nextKey = `${date}|${member}`;
+    normalized[nextKey] = normalized[nextKey]
+      ? newerRecord(normalized[nextKey], next, "second", rules)
+      : next;
+  });
+  return normalized;
 }
 function normalize(source) {
   const loaded = source || {};
@@ -141,7 +161,7 @@ function normalize(source) {
       pass: Array.isArray(loaded.reviewMessages?.pass) ? loaded.reviewMessages.pass : clone(defaultData.reviewMessages.pass),
       fail: Array.isArray(loaded.reviewMessages?.fail) ? loaded.reviewMessages.fail : clone(defaultData.reviewMessages.fail)
     },
-    records: loaded.records || {}
+    records: normalizeRecordMap(loaded.records || {}, rules)
   };
 }
 function loadLocal() {
@@ -1290,8 +1310,13 @@ function renderDateCalendars() {
 function periodKeys(endKey, days) {
   return Array.from({ length: days }, (_, index) => addDays(endKey, index - days + 1));
 }
+function recordForReport(report, day, member) {
+  const direct = report?.records?.[`${day}|${member}`];
+  if (direct && (!direct.date || direct.date === day) && (!direct.member || direct.member === member)) return direct;
+  return Object.values(report?.records || {}).find((record) => record?.date === day && record?.member === member) || null;
+}
 function recordFor(day, member) {
-  return reportData().records[`${day}|${member}`] || null;
+  return recordForReport(reportData(), day, member);
 }
 function ensureRecordFor(day, member) {
   const key = `${day}|${member}`;
@@ -2025,14 +2050,14 @@ function latestRecordText(records, fields = ["reason", "harvest", "diary"]) {
     .find(Boolean) || "";
 }
 function aggregateMemberRange(member, days, report, itemNames) {
-  const records = days.map((day) => report.records?.[`${day}|${member}`]).filter(Boolean);
+  const records = days.map((day) => recordForReport(report, day, member)).filter(Boolean);
   const items = Object.fromEntries(itemNames.map((name) => [name, 0]));
   let raw = 0;
   let weighted = 0;
   let quota = 0;
   let checkinCount = 0;
   days.forEach((day) => {
-    const rec = report.records?.[`${day}|${member}`];
+    const rec = recordForReport(report, day, member);
     raw += Number(rec?.raw_total || 0);
     weighted += Number(rec?.weighted_total || 0);
     quota += memberQuota(member, day);
@@ -2066,7 +2091,7 @@ function renderDetailSummaryGrid(containerId, itemTotals, stats) {
   const statCards = [
     { label: "原始合计", value: fmt(stats.raw || 0) },
     { label: "换算合计", value: fmt(stats.weighted || 0), strong: true },
-    { label: "周期定额", value: fmt(stats.quota || 0) },
+    { label: stats.quotaLabel || "周期定额", value: fmt(stats.quota || 0) },
     { label: "总差额", value: `${(stats.diff || 0) >= 0 ? "+" : ""}${fmt(stats.diff || 0)}`, tone: (stats.diff || 0) >= 0 ? "good" : "bad" }
   ].map((item) => `
     <div class="item-total-card stat ${item.strong ? "featured" : ""} ${item.tone || ""}">
@@ -2109,6 +2134,7 @@ function renderOverview() {
   renderOverviewGroupPicker(report);
   const range = overviewRangeInfo();
   const days = buildDateRange(range.start, range.end);
+  const quotaLabel = days.length === 1 ? "定额" : "周期定额";
   if ($("overviewRangeSelect")) $("overviewRangeSelect").value = overviewRangeMode;
   if ($("overviewRangeHint")) $("overviewRangeHint").textContent = `${range.label}：${rangeText(range)} · ${days.length} 天`;
   if ($("overviewScopeHint")) $("overviewScopeHint").textContent = `当前查看：${selectedReportLabel()} · ${overviewGroupLabel(report)} · ${range.label}`;
@@ -2144,7 +2170,7 @@ function renderOverview() {
         <span class="status ${row.passed ? "pass" : "fail"}">${row.passed ? "达标" : "未达"}</span>
       </div>
       <div class="progress" title="${row.rate}%"><span style="--w:${row.rate}%"></span></div>
-      <div class="hint">换算 ${fmt(row.weighted)} / 定额 ${fmt(row.quota)}</div>
+      <div class="hint">换算 ${fmt(row.weighted)} / ${quotaLabel} ${fmt(row.quota)}</div>
       <div class="hint">差额 ${row.diff >= 0 ? "+" : ""}${fmt(row.diff)}</div>
       <div class="hint">打卡 ${row.checkinCount}/${row.checkinSlots}</div>
       <div class="hint">${escapeHtml(row.note || "暂无备注")}</div>
@@ -2187,7 +2213,8 @@ function renderOverview() {
     raw: detailRaw,
     weighted: detailWeighted,
     quota: detailQuota,
-    diff: detailWeighted - detailQuota
+    diff: detailWeighted - detailQuota,
+    quotaLabel
   });
   renderMixedOverviewTable();
   renderCheckinOverview();
@@ -2253,7 +2280,7 @@ function renderMixedOverviewTable() {
     return;
   }
   const rows = days.map((day) => {
-    const rec = report.records?.[`${day}|${member}`];
+    const rec = recordForReport(report, day, member);
     const items = rec?.items || {};
     const weighted = Number(rec?.weighted_total || 0);
     const quota = memberQuota(member, day);
@@ -2378,7 +2405,7 @@ function renderCheckinOverview() {
   const rows = [];
   days.forEach((day) => {
     members.forEach((member) => {
-      const rec = report.records?.[`${day}|${member}`];
+      const rec = recordForReport(report, day, member);
       const group = report.memberGroups?.[member] || report.groups?.[0] || "";
       rows.push(`
         <tr>
