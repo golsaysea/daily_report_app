@@ -62,6 +62,7 @@ let overviewDetailGroup = "";
 let overviewDetailMember = "";
 let mixedTableGroup = "";
 let mixedTableMember = "";
+let mixedTableRangeMode = "default";
 let checkinViewGroup = "";
 let checkinViewMember = "";
 let pendingDialogField = "";
@@ -1100,6 +1101,20 @@ function weekStartKey(dayKey) {
   date.setDate(date.getDate() - weekday + 1);
   return dateKeyFromDate(date);
 }
+function weekRangeFor(dayKey) {
+  const start = weekStartKey(dayKey);
+  return { start, end: addDays(start, 6) };
+}
+function applyMixedTableDefaultRange() {
+  const startInput = $("mixedTableStart");
+  const endInput = $("mixedTableEnd");
+  if (!startInput || !endInput) return;
+  if (mixedTableRangeMode !== "default" && startInput.value && endInput.value) return;
+  const range = weekRangeFor(currentDate);
+  startInput.value = range.start;
+  endInput.value = range.end;
+  mixedTableRangeMode = "default";
+}
 function selectDate(nextDate, shouldSave = true) {
   if (!nextDate) return;
   if (shouldSave) saveFormSilently();
@@ -1995,8 +2010,7 @@ function renderMixedOverviewTable() {
   const pick = renderGroupMemberSelectors("mixedTableGroup", "mixedTableMember", mixedTableGroup, mixedTableMember, true, false);
   mixedTableGroup = pick.group;
   mixedTableMember = pick.member;
-  if (!$("mixedTableStart").value) $("mixedTableStart").value = `${currentDate.slice(0, 7)}-01`;
-  if (!$("mixedTableEnd").value) $("mixedTableEnd").value = currentDate;
+  applyMixedTableDefaultRange();
   let start = $("mixedTableStart").value || currentDate;
   let end = $("mixedTableEnd").value || currentDate;
   if (start > end) {
@@ -2996,10 +3010,16 @@ function bindEvents() {
       renderOverview();
     };
   });
-  ["mixedTableGroup", "mixedTableMember", "mixedTableStart", "mixedTableEnd"].forEach((id) => {
+  ["mixedTableGroup", "mixedTableMember"].forEach((id) => {
     $(id).onchange = () => {
       mixedTableGroup = $("mixedTableGroup").value;
       mixedTableMember = $("mixedTableMember").value;
+      renderMixedOverviewTable();
+    };
+  });
+  ["mixedTableStart", "mixedTableEnd"].forEach((id) => {
+    $(id).onchange = () => {
+      mixedTableRangeMode = $("mixedTableStart").value || $("mixedTableEnd").value ? "custom" : "default";
       renderMixedOverviewTable();
     };
   });
