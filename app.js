@@ -1145,6 +1145,39 @@ function periodKeys(endKey, days) {
 function recordFor(day, member) {
   return reportData().records[`${day}|${member}`] || null;
 }
+function ensureRecordFor(day, member) {
+  const key = `${day}|${member}`;
+  if (!data.records[key]) {
+    data.records[key] = {
+      date: day,
+      member,
+      text: "",
+      raw_total: 0,
+      weighted_total: 0,
+      quota_total: memberQuota(member, day),
+      status: "待审核",
+      reason: "",
+      harvest: "",
+      diary: "",
+      items: {},
+      checkins: {},
+      updated_at: ""
+    };
+  }
+  data.records[key].checkins = sanitizeCheckins(data.records[key].checkins || {});
+  return data.records[key];
+}
+function updateRecordTotals(rec) {
+  const parsed = { items: rec.items || {}, ...entryTotals(rec.items || {}) };
+  rec.items = parsed.items;
+  rec.text = itemsToText(parsed.items);
+  rec.raw_total = parsed.raw;
+  rec.weighted_total = parsed.weighted;
+  rec.quota_total = memberQuota(rec.member, rec.date);
+  if (!rec.status) rec.status = "待审核";
+  rec.updated_at = new Date().toISOString();
+  return rec;
+}
 function analysisGroupValue(report = reportData()) {
   const group = $("analysisGroup")?.value || report.groups?.[0] || "";
   return report.groups?.includes(group) ? group : report.groups?.[0] || "";
@@ -1956,6 +1989,7 @@ function renderHistory() {
   `).join("") || `<tr><td colspan="6" class="hint">还没有历史记录。</td></tr>`;
 }
 function renderMixedOverviewTable() {
+  if (!reportDataOverride) return withReportData(selectedReportData(), renderMixedOverviewTable);
   const report = reportData();
   if (!$("mixedTableHead")) return;
   const pick = renderGroupMemberSelectors("mixedTableGroup", "mixedTableMember", mixedTableGroup, mixedTableMember, true, false);
@@ -1975,10 +2009,14 @@ function renderMixedOverviewTable() {
   if ($("mixedTableMember") && member) $("mixedTableMember").value = member;
   const days = buildDateRange(start, end);
   const itemNames = configuredItems();
+  const checkinOptions = normalizeCheckinOptions(data.checkinOptions || defaultData.checkinOptions);
+  const editable = report === data && data.members.includes(member);
   const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
   let totalWeighted = 0;
   let totalQuota = 0;
-  $("mixedTableHint").textContent = member ? `${member} · ${start} 至 ${end} · 打卡和报数合并查看` : "请选择成员";
+  $("mixedTableHint").textContent = member
+    ? `${member} · ${start} 至 ${end} · ${editable ? "可直接编辑，自动同步到今日记录" : "当前范围只读"}`
+    : "请选择成员";
   $("mixedTableHead").innerHTML = `
     <tr>
       <th>日期</th>
@@ -2012,9 +2050,21 @@ function renderMixedOverviewTable() {
           const value = rec?.checkins?.[period.key];
           const status = checkinStatus(value);
           const time = checkinTimeText(value).replace("记录时间 ", "");
-          return `<td class="mixed-checkin ${status ? "filled" : ""}" title="${escapeAttr(checkinDisplay(value))}"><span>${escapeHtml(status || "")}</span>${time ? `<small>${escapeHtml(time)}</small>` : ""}</td>`;
+          const options = normalizeCheckinOptions([...checkinOptions, status].filter(Boolean));
+          return `<td class="mixed-checkin ${status ? "filled" : ""}" title="${escapeAttr(checkinDisplay(value))}">
+            <select data-mixed-checkin data-day="${escapeAttr(day)}" data-member="${escapeAttr(member)}" data-period="${escapeAttr(period.key)}" ${editable ? "" : "disabled"}>
+              <option value=""></option>
+              ${options.map((option) => `<option value="${escapeAttr(option)}" ${status === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+            </select>
+            ${time ? `<small>${escapeHtml(time)}</small>` : ""}
+          </td>`;
         }).join("")}
-        ${itemNames.map((name) => `<td class="${Number(items[name] || 0) ? "mixed-number" : ""}">${Number(items[name] || 0) ? fmt(items[name]) : ""}</td>`).join("")}
+        ${itemNames.map((name) => {
+          const amount = Number(items[name] || 0);
+          return `<td class="${amount ? "mixed-number" : ""}">
+            <input data-mixed-item data-day="${escapeAttr(day)}" data-member="${escapeAttr(member)}" data-item="${escapeAttr(name)}" type="number" step="0.01" inputmode="decimal" value="${amount || ""}" placeholder="0" ${editable ? "" : "disabled"}>
+          </td>`;
+        }).join("")}
         <td class="mixed-total">${weighted ? fmt(weighted) : ""}</td>
         <td>${fmt(quota)}</td>
         <td class="${diff >= 0 ? "mixed-good" : "mixed-bad"}">${diff >= 0 ? "+" : ""}${fmt(diff)}</td>
@@ -2035,6 +2085,57 @@ function renderMixedOverviewTable() {
     </tr>
   `);
   $("mixedTableBody").innerHTML = rows.join("");
+  bindMixedTableEdits();
+}
+function bindMixedTableEdits() {
+  $("mixedTableBody").querySelectorAll("[data-mixed-checkin]").forEach((select) => {
+    select.onchange = () => updateMixedCheckin(select);
+  });
+  $("mixedTableBody").querySelectorAll("[data-mixed-item]").forEach((input) => {
+    input.onchange = () => updateMixedItem(input);
+    input.onkeydown = (event) => {
+      if (event.key === "Enter") input.blur();
+    };
+  });
+}
+function updateMixedCheckin(select) {
+  const day = select.dataset.day || currentDate;
+  const member = select.dataset.member || "";
+  const period = select.dataset.period || "";
+  if (!member || !period || !data.members.includes(member)) return;
+  const rec = ensureRecordFor(day, member);
+  rec.checkins = sanitizeCheckins(rec.checkins || {});
+  const status = normalizeCheckinStatus(select.value || "");
+  if (!status) delete rec.checkins[period];
+  else {
+    const now = new Date();
+    rec.checkins[period] = {
+      status,
+      time: now.toLocaleTimeString("zh-CN", { hour12: false }),
+      iso: now.toISOString()
+    };
+  }
+  rec.updated_at = new Date().toISOString();
+  persistMixedEdit(day, member);
+}
+function updateMixedItem(input) {
+  const day = input.dataset.day || currentDate;
+  const member = input.dataset.member || "";
+  const item = input.dataset.item || "";
+  if (!member || !item || !data.members.includes(member)) return;
+  const rec = ensureRecordFor(day, member);
+  rec.items = { ...(rec.items || {}) };
+  const value = Number(input.value || 0);
+  if (!value) delete rec.items[item];
+  else rec.items[item] = value;
+  updateRecordTotals(rec);
+  persistMixedEdit(day, member);
+}
+function persistMixedEdit(day, member) {
+  persistLocal();
+  scheduleRecordCloudSave();
+  if (day === currentDate && member === currentMember) loadForm();
+  renderOverview();
 }
 function renderCheckinOverview() {
   const report = reportData();
