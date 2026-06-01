@@ -3123,6 +3123,73 @@ function rowsToWorksheet(name, rows) {
     </Worksheet>
   `;
 }
+function excelBordersXml() {
+  return `<Borders>
+    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#FFFFFF"/>
+    <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#FFFFFF"/>
+    <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#FFFFFF"/>
+    <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#FFFFFF"/>
+  </Borders>`;
+}
+function mixedWorkbookStylesXml() {
+  const borders = excelBordersXml();
+  return `
+    <Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Center" ss:WrapText="1"/></Style>
+    <Style ss:ID="sTitle"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#D95F5F" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sHeader"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#E57373" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sDate"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Font ss:Bold="1"/><Interior ss:Color="#FCE4E4" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sItem"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Interior ss:Color="#FBEAEA" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sTotal"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Font ss:Bold="1"/><Interior ss:Color="#EA9999" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sQuota"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Interior ss:Color="#FFF2CC" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sDiffGood"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Interior ss:Color="#B7E1CD" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sDiffBad"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Interior ss:Color="#F4CCCC" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sNote"><Alignment ss:Horizontal="Left" ss:Vertical="Center" ss:WrapText="1"/><Interior ss:Color="#FFF2F2" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sCheckinGood"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Font ss:Bold="1"/><Interior ss:Color="#63D878" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sCheckinLate"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#D9534F" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sCheckinLeave"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Font ss:Bold="1"/><Interior ss:Color="#FCE5CD" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sCheckinBlue"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Font ss:Bold="1"/><Interior ss:Color="#CFE2F3" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sCheckinBlank"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Interior ss:Color="#FDEDED" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sStatusGood"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Font ss:Bold="1"/><Interior ss:Color="#D9EAD3" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sStatusBad"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Font ss:Bold="1" ss:Color="#990000"/><Interior ss:Color="#F4CCCC" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sSpacer"><Interior ss:Color="#FFFFFF" ss:Pattern="Solid"/></Style>
+  `;
+}
+function styledCell(value, styleId = "", extra = {}) {
+  return { value, styleId, ...extra };
+}
+function styledCellXml(cell) {
+  const spec = cell && typeof cell === "object" && !Array.isArray(cell) && Object.prototype.hasOwnProperty.call(cell, "value")
+    ? cell
+    : { value: cell };
+  const value = spec.value ?? "";
+  const type = spec.type || (typeof value === "number" && Number.isFinite(value) ? "Number" : "String");
+  const attrs = [
+    spec.styleId ? ` ss:StyleID="${xmlEscape(spec.styleId)}"` : "",
+    Number(spec.mergeAcross || 0) > 0 ? ` ss:MergeAcross="${Number(spec.mergeAcross)}"` : ""
+  ].join("");
+  return `<Cell${attrs}><Data ss:Type="${type}">${xmlEscape(value)}</Data></Cell>`;
+}
+function rowsToStyledWorksheet(name, rows, columns = []) {
+  return `
+    <Worksheet ss:Name="${xmlEscape(sheetNameSafe(name))}">
+      <Table>
+        ${columns.map((width) => `<Column ss:Width="${Number(width) || 48}"/>`).join("")}
+        ${rows.map((row) => `<Row>${row.map(styledCellXml).join("")}</Row>`).join("")}
+      </Table>
+    </Worksheet>
+  `;
+}
+function styledWorkbookXml(sheets, stylesXml) {
+  return `<?xml version="1.0"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+  <Styles>${stylesXml}</Styles>
+  ${sheets.join("\n")}
+</Workbook>`;
+}
 function buildThreeMonthWorkbookXml() {
   const itemNames = configuredItems();
   const records = recordsInLastMonths(3);
@@ -3201,6 +3268,84 @@ function mixedTableExportRange() {
   if (start > end) [start, end] = [end, start];
   return { start, end, days: buildDateRange(start, end) };
 }
+function mixedExportCheckinStyle(value) {
+  const status = checkinStatus(value);
+  if (!status) return "sCheckinBlank";
+  if (/(迟到|迟|未到)/.test(status)) return "sCheckinLate";
+  if (/(请假|假|休)/.test(status)) return "sCheckinLeave";
+  if (/(听|交通|上班|农活|聚会|值日)/.test(status)) return "sCheckinBlue";
+  if (/(上线|准时|到|达标)/.test(status)) return "sCheckinGood";
+  return "sCheckinBlue";
+}
+function mixedExportStatusStyle(status) {
+  if (/(未|待|不|失败)/.test(String(status || ""))) return "sStatusBad";
+  if (status) return "sStatusGood";
+  return "sItem";
+}
+function mixedExportBlock(member, index, group, days, itemNames, periods, report) {
+  const header = ["日期", ...periods.map((period) => `${period.label}打卡`), ...itemNames, "原始", "换算", "定额", "差额", "状态", "备注"];
+  const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
+  const records = days.map((day) => {
+    const rec = recordForReport(report, day, member);
+    const items = rec?.items || {};
+    itemNames.forEach((name) => {
+      itemTotals[name] += Number(items[name] || 0);
+    });
+    const totals = totalsForItems(items, itemNames, report);
+    const quota = memberQuota(member, day);
+    return { day, rec, items, raw: totals.raw, weighted: totals.weighted, quota, diff: totals.weighted - quota };
+  });
+  const totalRaw = records.reduce((sum, row) => sum + row.raw, 0);
+  const totalWeighted = records.reduce((sum, row) => sum + row.weighted, 0);
+  const totalQuota = records.reduce((sum, row) => sum + row.quota, 0);
+  const totalDiff = totalWeighted - totalQuota;
+  const blockWidth = header.length;
+  const title = `${index + 1} ${member}｜${group || "未分组"}｜换算 ${fmt(totalWeighted)}｜定额 ${fmt(totalQuota)}｜差额 ${fmt(totalDiff)}`;
+  const rows = [
+    [styledCell(title, "sTitle", { mergeAcross: blockWidth - 1 })],
+    header.map((label) => styledCell(label, "sHeader")),
+    [
+      styledCell("合计", "sDate"),
+      ...periods.map(() => styledCell("", "sCheckinBlank")),
+      ...itemNames.map((name) => styledCell(itemTotals[name] || "", "sItem")),
+      styledCell(totalRaw, "sTotal"),
+      styledCell(totalWeighted, "sTotal"),
+      styledCell(totalQuota, "sQuota"),
+      styledCell(totalDiff, totalDiff >= 0 ? "sDiffGood" : "sDiffBad"),
+      styledCell("", "sItem"),
+      styledCell("", "sNote")
+    ],
+    ...records.map(({ day, rec, items, raw, weighted, quota, diff }) => [
+      styledCell(day.slice(5), "sDate"),
+      ...periods.map((period) => styledCell(checkinDisplay(rec?.checkins?.[period.key]), mixedExportCheckinStyle(rec?.checkins?.[period.key]))),
+      ...itemNames.map((name) => styledCell(Number(items[name] || 0) || "", "sItem")),
+      styledCell(raw, "sTotal"),
+      styledCell(weighted, "sTotal"),
+      styledCell(quota, "sQuota"),
+      styledCell(diff, diff >= 0 ? "sDiffGood" : "sDiffBad"),
+      styledCell(rec?.status || "", mixedExportStatusStyle(rec?.status || "")),
+      styledCell(rec?.reason || rec?.harvest || rec?.diary || "", "sNote")
+    ])
+  ];
+  return { rows, blockWidth };
+}
+function mixedExportColumnWidths(blockWidth, itemCount, memberCount) {
+  const block = [
+    46,
+    ...checkinPeriods().map(() => 46),
+    ...Array.from({ length: itemCount }, () => 56),
+    56,
+    56,
+    56,
+    56,
+    62,
+    126
+  ];
+  return Array.from({ length: memberCount }, (_, index) => [
+    ...block,
+    ...(index < memberCount - 1 ? [12] : [])
+  ]).flat().slice(0, memberCount * blockWidth + Math.max(0, memberCount - 1));
+}
 function buildMixedTableWorkbookXml() {
   const report = selectedReportData();
   return withReportData(report, () => {
@@ -3209,43 +3354,24 @@ function buildMixedTableWorkbookXml() {
     const members = membersForGroupValue(group, report);
     const itemNames = groupVisibleItems(group, report);
     const periods = checkinPeriods();
-    const mixedHeader = [
-      "日期",
-      "分组",
-      "成员",
-      ...periods.map((period) => `${period.label}打卡`),
-      ...itemNames,
-      "原始",
-      "换算",
-      "定额",
-      "差额",
-      "状态",
-      "备注"
-    ];
-    const mixedRows = [mixedHeader];
-    days.forEach((day) => {
-      members.forEach((member) => {
-        const rec = recordForReport(report, day, member);
-        const totals = totalsForItems(rec?.items || {}, itemNames, report);
-        const weighted = totals.weighted;
-        const raw = totals.raw;
-        const quota = memberQuota(member, day);
-        mixedRows.push([
-          day,
-          report.memberGroups?.[member] || group || report.groups?.[0] || "",
-          member,
-          ...periods.map((period) => checkinDisplay(rec?.checkins?.[period.key])),
-          ...itemNames.map((name) => Number(rec?.items?.[name] || 0)),
-          raw,
-          weighted,
-          quota,
-          weighted - quota,
-          rec?.status || "",
-          rec?.reason || rec?.harvest || rec?.diary || ""
-        ]);
-      });
-    });
-    return { group, start, end, xml: workbookXml([rowsToWorksheet(`${group || "混合"}总表`, mixedRows)]) };
+    if (!members.length) {
+      return {
+        group,
+        start,
+        end,
+        xml: styledWorkbookXml([rowsToStyledWorksheet(`${group || "混合"}总表`, [[styledCell("暂无成员", "sTitle")]], [120])], mixedWorkbookStylesXml())
+      };
+    }
+    const blocks = members.map((member, index) => mixedExportBlock(member, index, group, days, itemNames, periods, report));
+    const maxRows = Math.max(...blocks.map((block) => block.rows.length));
+    const spacer = styledCell("", "sSpacer");
+    const rows = Array.from({ length: maxRows }, (_, rowIndex) => blocks.flatMap((block, blockIndex) => [
+      ...(block.rows[rowIndex] || Array.from({ length: block.blockWidth }, () => styledCell("", "sItem"))),
+      ...(blockIndex < blocks.length - 1 ? [spacer] : [])
+    ]));
+    const columns = mixedExportColumnWidths(blocks[0].blockWidth, itemNames.length, blocks.length);
+    const sheet = rowsToStyledWorksheet(`${group || "混合"}总表`, rows, columns);
+    return { group, start, end, xml: styledWorkbookXml([sheet], mixedWorkbookStylesXml()) };
   });
 }
 function exportMixedTableWorkbook() {
