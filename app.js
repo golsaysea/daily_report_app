@@ -3486,7 +3486,7 @@ function bindEvents() {
     selectDate($("overviewDateInput").value || todayLocalKey());
   };
   $("overviewRangeSelect").onchange = () => {
-    overviewRangeMode = $("overviewRangeSelect").value || "week";
+    overviewRangeMode = $("overviewRangeSelect").value || "day";
     renderOverview();
   };
   ["monthInput", "overviewMonthInput"].forEach((id) => {
