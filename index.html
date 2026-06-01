@@ -50,12 +50,12 @@
             <div class="metric date-metric">
               <span>日期</span>
               <strong id="dateDisplay"></strong>
-              <input class="hidden" id="dateInput" type="date">
-              <div class="month-nav">
-                <button id="prevMonthBtn" type="button" title="上个月">‹</button>
-                <input id="monthInput" type="month" aria-label="选择月份">
-                <button id="nextMonthBtn" type="button" title="下个月">›</button>
+              <div class="month-nav day-nav">
+                <button id="prevMonthBtn" type="button" title="前一天">‹</button>
+                <input id="dateInput" type="date" aria-label="选择日期">
+                <button id="nextMonthBtn" type="button" title="后一天">›</button>
               </div>
+              <input class="hidden" id="monthInput" type="month" aria-hidden="true" tabindex="-1">
               <div class="week-strip" id="dateWeekStrip"></div>
             </div>
             <div class="metric"><span>成员</span><strong id="memberCard">成员A</strong></div>
@@ -238,7 +238,13 @@
 
         <section class="view" id="mixedView">
           <section class="panel">
-            <div class="panel-head"><h2>混合表格</h2><span class="hint" id="mixedTableHint"></span></div>
+            <div class="panel-head">
+              <h2>混合表格</h2>
+              <div class="inline-actions">
+                <span class="hint" id="mixedTableHint"></span>
+                <button id="exportMixedTableBtn" type="button" title="导出当前混合表格">导出Excel</button>
+              </div>
+            </div>
             <div class="analysis-controls">
               <select id="mixedTableGroup"></select>
               <select id="mixedTableMember"></select>
@@ -249,6 +255,18 @@
               <table class="mixed-table">
                 <thead id="mixedTableHead"></thead>
                 <tbody id="mixedTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>小组打卡表</h2><span class="hint" id="mixedCheckinHint"></span></div>
+            <div class="analysis-controls mixed-checkin-controls">
+              <select id="mixedCheckinGroup"></select>
+            </div>
+            <div class="table-scroll mixed-table-wrap">
+              <table class="mixed-table mixed-checkin-table">
+                <thead id="mixedCheckinHead"></thead>
+                <tbody id="mixedCheckinBody"></tbody>
               </table>
             </div>
           </section>

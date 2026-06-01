@@ -63,12 +63,13 @@ let mergedSourceDataset = null;
 let reportDataOverride = null;
 let overviewSelectedGroups = JSON.parse(localStorage.getItem("dailyReportOverviewGroups") || "[]");
 let analysisTableMember = "";
-let overviewRangeMode = "day";
+let overviewRangeMode = "week";
 let overviewDetailGroup = "";
 let overviewDetailMember = "";
 let mixedTableGroup = "";
 let mixedTableMember = "";
 let mixedTableRangeMode = "default";
+let mixedCheckinGroup = "";
 let checkinViewGroup = "";
 let checkinViewMember = "";
 let checkinViewRangeMode = "default";
@@ -2282,6 +2283,7 @@ function renderMixedOverviewTable() {
   `;
   if (!member) {
     $("mixedTableBody").innerHTML = `<tr><td colspan="${5 + checkinPeriods().length + itemNames.length}" class="hint">暂无可查看成员。</td></tr>`;
+    renderMixedCheckinTable();
     return;
   }
   const rows = days.map((day) => {
@@ -2320,7 +2322,9 @@ function renderMixedOverviewTable() {
         <td class="mixed-total">${weighted ? fmt(weighted) : ""}</td>
         <td>${fmt(quota)}</td>
         <td class="${diff >= 0 ? "mixed-good" : "mixed-bad"}">${diff >= 0 ? "+" : ""}${fmt(diff)}</td>
-        <td class="mixed-note">${escapeHtml(rec?.reason || rec?.harvest || rec?.diary || "")}</td>
+        <td class="mixed-note">
+          <textarea data-mixed-note data-day="${escapeAttr(day)}" data-member="${escapeAttr(member)}" rows="2" ${editable ? "" : "disabled"}>${escapeHtml(rec?.reason || rec?.harvest || rec?.diary || "")}</textarea>
+        </td>
       </tr>
     `;
   });
@@ -2338,6 +2342,7 @@ function renderMixedOverviewTable() {
   `);
   $("mixedTableBody").innerHTML = rows.join("");
   bindMixedTableEdits();
+  renderMixedCheckinTable();
 }
 function bindMixedTableEdits() {
   $("mixedTableBody").querySelectorAll("[data-mixed-checkin]").forEach((select) => {
@@ -2347,6 +2352,12 @@ function bindMixedTableEdits() {
     input.onchange = () => updateMixedItem(input);
     input.onkeydown = (event) => {
       if (event.key === "Enter") input.blur();
+    };
+  });
+  $("mixedTableBody").querySelectorAll("[data-mixed-note]").forEach((textarea) => {
+    textarea.onchange = () => updateMixedNote(textarea);
+    textarea.onkeydown = (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) textarea.blur();
     };
   });
 }
@@ -2382,6 +2393,73 @@ function updateMixedItem(input) {
   else rec.items[item] = value;
   updateRecordTotals(rec);
   persistMixedEdit(day, member);
+}
+function updateMixedNote(textarea) {
+  const day = textarea.dataset.day || currentDate;
+  const member = textarea.dataset.member || "";
+  if (!member || !data.members.includes(member)) return;
+  const rec = ensureRecordFor(day, member);
+  rec.reason = textarea.value.trim();
+  rec.updated_at = new Date().toISOString();
+  persistMixedEdit(day, member);
+}
+function renderMixedCheckinTable() {
+  if (!reportDataOverride) return withReportData(selectedReportData(), renderMixedCheckinTable);
+  const report = reportData();
+  if (!$("mixedCheckinHead")) return;
+  applyMixedTableDefaultRange();
+  let start = $("mixedTableStart")?.value || currentDate;
+  let end = $("mixedTableEnd")?.value || currentDate;
+  if (start > end) [start, end] = [end, start];
+  const groups = report.groups || [];
+  const fallbackGroup = (mixedTableGroup && mixedTableGroup !== "__all__" && groups.includes(mixedTableGroup)) ? mixedTableGroup : groups[0] || "";
+  const group = groups.includes(mixedCheckinGroup) ? mixedCheckinGroup : fallbackGroup;
+  mixedCheckinGroup = group;
+  if ($("mixedCheckinGroup")) {
+    $("mixedCheckinGroup").innerHTML = groups.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join("");
+    $("mixedCheckinGroup").value = group;
+  }
+  const days = buildDateRange(start, end);
+  const members = membersForGroupValue(group, report);
+  const checkinOptions = normalizeCheckinOptions(data.checkinOptions || defaultData.checkinOptions);
+  const editable = report === data;
+  $("mixedCheckinHint").textContent = group
+    ? `${group} · ${start} 至 ${end} · ${members.length} 人一起打卡`
+    : "暂无小组";
+  $("mixedCheckinHead").innerHTML = `<tr><th>日期</th><th>成员</th>${checkinPeriods().map((period) => `<th>${period.label}打卡</th>`).join("")}</tr>`;
+  const rows = [];
+  days.forEach((day) => {
+    members.forEach((member) => {
+      const rec = recordForReport(report, day, member);
+      const canEditMember = editable && data.members.includes(member);
+      rows.push(`
+        <tr>
+          <td class="mixed-date">${escapeHtml(day.slice(5))}</td>
+          <td class="mixed-member">${escapeHtml(member)}</td>
+          ${checkinPeriods().map((period) => {
+            const value = rec?.checkins?.[period.key];
+            const status = checkinStatus(value);
+            const time = checkinTimeText(value).replace("记录时间 ", "");
+            const options = normalizeCheckinOptions([...checkinOptions, status].filter(Boolean));
+            return `<td class="mixed-checkin ${status ? "filled" : ""}" title="${escapeAttr(checkinDisplay(value))}">
+              <select data-mixed-checkin data-day="${escapeAttr(day)}" data-member="${escapeAttr(member)}" data-period="${escapeAttr(period.key)}" ${canEditMember ? "" : "disabled"}>
+                <option value=""></option>
+                ${options.map((option) => `<option value="${escapeAttr(option)}" ${status === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+              </select>
+              ${time ? `<small>${escapeHtml(time)}</small>` : ""}
+            </td>`;
+          }).join("")}
+        </tr>
+      `);
+    });
+  });
+  $("mixedCheckinBody").innerHTML = rows.join("") || `<tr><td colspan="${2 + checkinPeriods().length}" class="hint">暂无可查看成员。</td></tr>`;
+  bindMixedCheckinTableEdits();
+}
+function bindMixedCheckinTableEdits() {
+  $("mixedCheckinBody").querySelectorAll("[data-mixed-checkin]").forEach((select) => {
+    select.onchange = () => updateMixedCheckin(select);
+  });
 }
 function persistMixedEdit(day, member) {
   persistLocal();
@@ -3059,6 +3137,102 @@ function buildThreeMonthWorkbookXml() {
   ${sheets.join("\n")}
 </Workbook>`;
 }
+function workbookXml(sheets) {
+  return `<?xml version="1.0"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+  <Styles>
+    <Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Center"/></Style>
+  </Styles>
+  ${sheets.join("\n")}
+</Workbook>`;
+}
+function downloadExcelXml(xml, filename) {
+  const blob = new Blob([xml], { type: "application/vnd.ms-excel;charset=utf-8" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+function mixedTableExportRange() {
+  applyMixedTableDefaultRange();
+  let start = $("mixedTableStart")?.value || currentDate;
+  let end = $("mixedTableEnd")?.value || currentDate;
+  if (start > end) [start, end] = [end, start];
+  return { start, end, days: buildDateRange(start, end) };
+}
+function buildMixedTableWorkbookXml() {
+  const report = selectedReportData();
+  return withReportData(report, () => {
+    const { start, end, days } = mixedTableExportRange();
+    const itemNames = configuredItems();
+    const periods = checkinPeriods();
+    const pick = {
+      group: $("mixedTableGroup")?.value || mixedTableGroup || "__all__",
+      member: $("mixedTableMember")?.value || mixedTableMember || ""
+    };
+    const member = pick.member || membersForGroupValue(pick.group, report)[0] || reportMembers(report)[0] || "";
+    const mixedHeader = [
+      "日期",
+      "分组",
+      "成员",
+      ...periods.map((period) => `${period.label}打卡`),
+      ...itemNames,
+      "原始",
+      "换算",
+      "定额",
+      "差额",
+      "状态",
+      "备注"
+    ];
+    const mixedRows = [mixedHeader];
+    days.forEach((day) => {
+      const rec = recordForReport(report, day, member);
+      const weighted = Number(rec?.weighted_total || 0);
+      const raw = Number(rec?.raw_total || 0);
+      const quota = memberQuota(member, day);
+      mixedRows.push([
+        day,
+        report.memberGroups?.[member] || report.groups?.[0] || "",
+        member,
+        ...periods.map((period) => checkinDisplay(rec?.checkins?.[period.key])),
+        ...itemNames.map((name) => Number(rec?.items?.[name] || 0)),
+        raw,
+        weighted,
+        quota,
+        weighted - quota,
+        rec?.status || "",
+        rec?.reason || rec?.harvest || rec?.diary || ""
+      ]);
+    });
+    const checkinHeader = ["日期", "分组", "成员", ...periods.map((period) => `${period.label}打卡`)];
+    const checkinSheets = (report.groups || []).map((group) => {
+      const rows = [checkinHeader];
+      days.forEach((day) => {
+        membersForGroupValue(group, report).forEach((groupMember) => {
+          const rec = recordForReport(report, day, groupMember);
+          rows.push([
+            day,
+            group,
+            groupMember,
+            ...periods.map((period) => checkinDisplay(rec?.checkins?.[period.key]))
+          ]);
+        });
+      });
+      return rowsToWorksheet(`${group}打卡`, rows);
+    });
+    return { start, end, xml: workbookXml([rowsToWorksheet("混合表格", mixedRows), ...checkinSheets]) };
+  });
+}
+function exportMixedTableWorkbook() {
+  saveFormSilently();
+  const { start, end, xml } = buildMixedTableWorkbookXml();
+  downloadExcelXml(xml, `mixed_table_${start}_${end}.xls`);
+}
 function buildCsvBackups() {
   const itemNames = configuredItems();
   const rows = [["日期", "成员", ...itemNames, "原始", "换算", "定额", "差额", "状态", "备注"]];
@@ -3172,8 +3346,8 @@ function bindEvents() {
   ["monthInput", "overviewMonthInput"].forEach((id) => {
     $(id).onchange = () => selectDate(sameDayInMonth($(id).value || monthKeyFromDateKey(currentDate)));
   });
-  $("prevMonthBtn").onclick = () => selectDate(shiftMonth(currentDate, -1));
-  $("nextMonthBtn").onclick = () => selectDate(shiftMonth(currentDate, 1));
+  $("prevMonthBtn").onclick = () => selectDate(addDays(currentDate, -1));
+  $("nextMonthBtn").onclick = () => selectDate(addDays(currentDate, 1));
   $("overviewPrevMonthBtn").onclick = () => selectDate(shiftMonth(currentDate, -1));
   $("overviewNextMonthBtn").onclick = () => selectDate(shiftMonth(currentDate, 1));
   $("unlockBtn").onclick = () => unlockApp().catch((err) => {
@@ -3267,6 +3441,10 @@ function bindEvents() {
       renderMixedOverviewTable();
     };
   });
+  $("mixedCheckinGroup").onchange = () => {
+    mixedCheckinGroup = $("mixedCheckinGroup").value;
+    renderMixedCheckinTable();
+  };
   ["checkinViewGroup", "checkinViewMember"].forEach((id) => {
     $(id).onchange = () => {
       checkinViewGroup = $("checkinViewGroup").value;
@@ -3361,6 +3539,7 @@ function bindEvents() {
   $("cloudHistoryRefreshBtn").onclick = () => refreshCloudHistory(false);
   $("cloudHistoryRestoreBtn").onclick = () => restoreCloudHistory().catch((err) => alert(`恢复云端历史失败：${err.message}`));
   $("exportBtn").onclick = exportData;
+  $("exportMixedTableBtn").onclick = exportMixedTableWorkbook;
   $("backupBtn").onclick = () => setView("admin");
   $("sheetBackupBtn").onclick = backupSheets;
   $("importBtn").onclick = () => $("importFile").click();
