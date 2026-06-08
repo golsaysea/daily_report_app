@@ -115,18 +115,18 @@
               <small class="hint" id="overviewScopeHint">当前查看：当前文件夹</small>
             </div>
             <div class="overview-date">
-              <input class="hidden" id="overviewDateInput" type="date">
               <select id="overviewRangeSelect" aria-label="选择整体预览范围">
                 <option value="week">本周</option>
                 <option value="small-month">小月度汇总</option>
                 <option value="month">月度汇总</option>
                 <option value="day">今日</option>
               </select>
-              <div class="month-nav">
-                <button id="overviewPrevMonthBtn" type="button" title="上个月">‹</button>
-                <input id="overviewMonthInput" type="month" aria-label="选择月份">
-                <button id="overviewNextMonthBtn" type="button" title="下个月">›</button>
+              <div class="month-nav day-nav">
+                <button id="overviewPrevMonthBtn" type="button" title="前一天">‹</button>
+                <input id="overviewDateInput" type="date" aria-label="选择日期">
+                <button id="overviewNextMonthBtn" type="button" title="后一天">›</button>
               </div>
+              <input class="hidden" id="overviewMonthInput" type="month" aria-hidden="true" tabindex="-1">
               <div class="week-strip" id="overviewWeekStrip"></div>
               <small class="hint" id="overviewRangeHint"></small>
               <div class="group-multi" id="overviewGroupPicker">

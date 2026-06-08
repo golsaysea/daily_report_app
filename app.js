@@ -3494,8 +3494,8 @@ function bindEvents() {
   });
   $("prevMonthBtn").onclick = () => selectDate(addDays(currentDate, -1));
   $("nextMonthBtn").onclick = () => selectDate(addDays(currentDate, 1));
-  $("overviewPrevMonthBtn").onclick = () => selectDate(shiftMonth(currentDate, -1));
-  $("overviewNextMonthBtn").onclick = () => selectDate(shiftMonth(currentDate, 1));
+  $("overviewPrevMonthBtn").onclick = () => selectDate(addDays(currentDate, -1));
+  $("overviewNextMonthBtn").onclick = () => selectDate(addDays(currentDate, 1));
   $("unlockBtn").onclick = () => unlockApp().catch((err) => {
     $("lockHint").textContent = err.message || "登录失败";
   });
