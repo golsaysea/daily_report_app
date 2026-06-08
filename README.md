@@ -8,7 +8,7 @@
 
 1. 在 Vercel Marketplace 里给项目添加 Postgres 数据库，推荐 Neon 或 Supabase Postgres。
 2. 确认 Vercel 项目环境变量里有 `POSTGRES_URL` 或 `DATABASE_URL`。Neon 集成通常会自动创建 `POSTGRES_URL`。
-3. 添加环境变量 `TEAM_SYNC_TOKEN`，建议先设置为当前应用密码，例如 `999`。
+3. 添加环境变量 `TEAM_SYNC_TOKEN`，请使用至少 16 位的强随机口令，不要使用默认、短口令或与其他系统共用的密码。
 4. 重新部署 Vercel。
 5. 成员打开网页输入应用密码后，会自动读取 Vercel 云数据库。
 6. 成员编辑记录时会延迟自动写入 Vercel 云数据库；点击“提交”会立即强制同步当前记录。
@@ -43,6 +43,14 @@ Vercel 云同步会使用同一张最新状态表：
 云备份保存的是当前页面选择的数据视图：普通管理员保存当前文件夹；高级管理员切到“全部汇总”时保存汇总后的数据。
 
 管理员还可以在“同步与备份”里刷新云端历史，选择最近的历史版本恢复。这个历史由实时同步自动产生，不需要成员额外操作。
+
+## Vercel 数据安全
+
+- `DATABASE_URL` / `POSTGRES_URL`、`TEAM_SYNC_TOKEN`、`APP_PASSWORD` 和 `CLOUD_BACKUP_TOKEN` 只能配置在 Vercel Environment Variables，不要写入代码、README 或任何 JSON 数据文件。
+- 团队实时同步接口只接受 `TEAM_SYNC_TOKEN` 或 `APP_PASSWORD`；云备份接口只接受 `CLOUD_BACKUP_TOKEN`，两类口令不再混用。
+- 项目不再内置默认密码，首次使用前必须自行配置强口令。
+- Vercel 响应默认 `no-store`，并附加 CSP、`nosniff`、`frame-ancestors 'none'` 等安全头，降低缓存、点击劫持和资源注入风险。
+- Postgres 中保存的是应用数据 JSONB 和历史快照；数据库连接安全取决于 Vercel / Postgres 供应商账号、环境变量和数据库权限配置。
 
 ## 统计周期逻辑
 
@@ -100,7 +108,7 @@ Vercel 云同步会使用同一张最新状态表：
 
 ## 注意
 
-- 首次使用需要输入默认密码 `999`。
+- 首次使用前需要在 Vercel 配置 `APP_PASSWORD` 或 `TEAM_SYNC_TOKEN`；项目不再提供内置默认密码。
 - 成员侧只需要填写报数和提交，不需要配置云端。
 - 早中晚打卡默认留空，成员手动选择管理员配置的打卡选项后记录系统时间；系统不再自动判断准时或迟到，提交后进入人工审核。
 - 整体预览可以按分组/成员查看项目明细和打卡情况。

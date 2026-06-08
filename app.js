@@ -20,7 +20,7 @@
     { name: "美国时间", offset: "-05:00" },
     { name: "洛杉矶时间", offset: "-07:00" },
   ],
-  adminPassword: "999",
+  adminPassword: "",
   sheetBackupEnabled: true,
   backupCleanupEnabled: false,
   autoAudit: false,
@@ -83,6 +83,7 @@ let adminUnlocked = false;
 let showAllEntryItems = false;
 let appUnlocked = false;
 let collapsedGroups = JSON.parse(localStorage.getItem("dailyReportCollapsedGroups") || "{}");
+let lastTypingAt = 0;
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Number(n || 0).toLocaleString("zh-CN", { maximumFractionDigits: 3 });
 const recordKey = () => `${currentDate}|${currentMember}`;
@@ -352,7 +353,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
     merged.checkinOptions = clone(local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(local.quota || 0);
-    merged.adminPassword = String(local.adminPassword || "999");
+    merged.adminPassword = String(local.adminPassword || "");
     merged.sheetBackupEnabled = local.sheetBackupEnabled !== false;
     merged.backupCleanupEnabled = local.backupCleanupEnabled === true;
     merged.autoAudit = local.autoAudit === true;
@@ -369,7 +370,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
     merged.checkinOptions = clone(remote.checkinOptions || local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(remote.quota ?? local.quota ?? 0);
-    merged.adminPassword = String(remote.adminPassword || local.adminPassword || "999");
+    merged.adminPassword = String(remote.adminPassword || local.adminPassword || "");
     merged.sheetBackupEnabled = remote.sheetBackupEnabled !== false;
     merged.backupCleanupEnabled = remote.backupCleanupEnabled === true;
     merged.autoAudit = remote.autoAudit === true;
@@ -635,9 +636,13 @@ function scheduleSave(mode = "records") {
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => persistEverywhere(mode), 180);
 }
+function markUserTyping() {
+  lastTypingAt = Date.now();
+}
 function scheduleDraftSave() {
+  markUserTyping();
   window.clearTimeout(draftTimer);
-  draftTimer = window.setTimeout(() => saveFormSilently(), 220);
+  draftTimer = window.setTimeout(() => saveFormSilently(), 500);
 }
 function scheduleRecordCloudSave() {
   window.clearTimeout(recordCloudSaveTimer);
@@ -653,6 +658,13 @@ function preserveActiveDraft() {
   } catch {
     // The draft saver is best-effort before refresh; normal editing can continue.
   }
+}
+function isActiveTypingWindow() {
+  if (Date.now() - lastTypingAt > 1800) return false;
+  const active = document.activeElement;
+  if (!active) return false;
+  const tag = String(active.tagName || "").toLowerCase();
+  return tag === "input" || tag === "textarea" || active.isContentEditable;
 }
 function setSyncStatus(message, location = cloudLocationLabel) {
   syncStatusText = message || syncStatusText;
@@ -752,7 +764,7 @@ function setCloudDbStatus(message, meta) {
 }
 async function callCloudData(action, payload = {}, token = appSessionPassword) {
   if (!cloudDatabaseAvailable()) throw new Error("请通过 Vercel 或本地开发服务器打开网页，直接打开本地文件不能使用 Vercel 云同步。");
-  const syncToken = String(token || appSessionPassword || cloudBackupToken || "").trim();
+  const syncToken = String(token || appSessionPassword || "").trim();
   if (!syncToken) throw new Error("请先输入应用密码。");
   const response = await fetch("/api/cloud-data", {
     method: "POST",
@@ -771,7 +783,8 @@ async function verifyAppPassword(password) {
   const candidate = String(password || "").trim();
   if (!candidate) return { ok: false, error: "请输入应用密码" };
   if (!cloudDatabaseAvailable()) {
-    return candidate === String(data.adminPassword || "999")
+    if (!data.adminPassword) return { ok: false, error: "本地模式还没有设置应用密码，请通过 Vercel 环境变量 APP_PASSWORD 或 TEAM_SYNC_TOKEN 配置。" };
+    return candidate === String(data.adminPassword)
       ? { ok: true, source: "local" }
       : { ok: false, error: "密码不正确" };
   }
@@ -828,6 +841,10 @@ async function pullCloudDatabaseData({ silent = false, token = appSessionPasswor
     return { pulled: false, reason: "missing-token" };
   }
   try {
+    if (!beforeUnlock && silent && isActiveTypingWindow()) {
+      setCloudDbStatus("正在输入，稍后同步");
+      return { pulled: false, reason: "active-typing" };
+    }
     if (!beforeUnlock) preserveActiveDraft();
     const result = await callCloudData("pull", {}, syncToken);
     if (result.data) {
@@ -862,7 +879,7 @@ async function saveCloudDatabaseData(mode = "records", silent = false) {
   try {
     const result = await callCloudData("save", { data: normalize(data), mode, actor: currentMember }, appSessionPassword);
     if (result.data) {
-      data = normalize(result.data);
+      data = mergeCloudData(result.data, data, "records");
       persistLocal();
     }
     setCloudDbStatus(`已写入 Vercel 云库 · ${new Date().toLocaleTimeString("zh-CN")}`, result.meta || null);
@@ -2830,7 +2847,7 @@ function render() {
 function setView(view) {
   if (view === "admin" && !adminUnlocked) {
     const password = prompt("请输入管理员密码");
-    if (password !== String(data.adminPassword || "999")) {
+    if (!data.adminPassword || password !== String(data.adminPassword)) {
       alert("管理员密码不正确。");
       return;
     }
@@ -3026,7 +3043,7 @@ async function refreshSourceDatasets() {
 }
 async function unlockSuperAdmin() {
   const password = prompt("请输入管理员密码以提升高级管理员权限");
-  if (password !== String(data.adminPassword || "999")) return alert("管理员密码不正确。");
+  if (!data.adminPassword || password !== String(data.adminPassword)) return alert("管理员密码不正确。");
   superAdminUnlocked = true;
   document.body.classList.add("super-admin");
   activeReportSource = sourceDirHandles.length ? "all" : "current";
@@ -3139,7 +3156,7 @@ function mixedWorkbookStylesXml() {
     <Style ss:ID="sHeader"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#E57373" ss:Pattern="Solid"/>${borders}</Style>
     <Style ss:ID="sDate"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Font ss:Bold="1"/><Interior ss:Color="#FCE4E4" ss:Pattern="Solid"/>${borders}</Style>
     <Style ss:ID="sItem"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Interior ss:Color="#FBEAEA" ss:Pattern="Solid"/>${borders}</Style>
-    <Style ss:ID="sTotal"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Font ss:Bold="1"/><Interior ss:Color="#EA9999" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sTotal"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Font ss:Bold="1"/><Interior ss:Color="#EA9A9A" ss:Pattern="Solid"/>${borders}</Style>
     <Style ss:ID="sQuota"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Interior ss:Color="#FFF2CC" ss:Pattern="Solid"/>${borders}</Style>
     <Style ss:ID="sDiffGood"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Interior ss:Color="#B7E1CD" ss:Pattern="Solid"/>${borders}</Style>
     <Style ss:ID="sDiffBad"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Interior ss:Color="#F4CCCC" ss:Pattern="Solid"/>${borders}</Style>
@@ -3724,6 +3741,10 @@ function bindEvents() {
     const picker = $("overviewGroupPicker");
     if (picker && !picker.contains(event.target)) picker.classList.remove("open");
   });
+  document.addEventListener("input", (event) => {
+    const target = event.target;
+    if (target && ["INPUT", "TEXTAREA"].includes(target.tagName)) markUserTyping();
+  }, true);
 }
 pruneBackups();
 createBackup("每日自动备份");

@@ -22,7 +22,7 @@ const defaultData = {
   memberQuotas: {},
   dailyQuotas: {},
   checkinOptions: ["\u4e0a\u7ebf", "\u8bf7\u5047", "\u71ac\u591c\u8fdf\u5230"],
-  adminPassword: process.env.APP_PASSWORD || "999",
+  adminPassword: "",
   sheetBackupEnabled: true,
   backupCleanupEnabled: false,
   autoUpdateEnabled: false,
@@ -79,7 +79,7 @@ function normalize(source) {
     ? Array.from(new Set(data.checkinOptions.map(normalizeCheckinStatus).filter(Boolean)))
     : clone(defaultData.checkinOptions);
   data.records = normalizeRecordMap(data.records && typeof data.records === "object" ? data.records : {});
-  data.adminPassword = String(data.adminPassword || process.env.APP_PASSWORD || "999");
+  data.adminPassword = String(data.adminPassword || "");
   data.updated_at = String(data.updated_at || "");
   data.members.forEach((member) => {
     if (!data.memberGroups[member]) data.memberGroups[member] = data.groups[0];
@@ -109,7 +109,7 @@ function writeData(data) {
 }
 
 function passwordCandidates(data) {
-  return new Set([data.adminPassword, process.env.APP_PASSWORD, process.env.TEAM_SYNC_TOKEN, "999"].filter(Boolean).map(String));
+  return new Set([data.adminPassword, process.env.APP_PASSWORD, process.env.TEAM_SYNC_TOKEN].filter(Boolean).map(String));
 }
 
 function isAuthorized(req, data, bodyPassword = "") {

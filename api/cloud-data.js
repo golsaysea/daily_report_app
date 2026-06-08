@@ -17,7 +17,7 @@ const defaultData = {
   memberQuotas: {},
   dailyQuotas: {},
   checkinOptions: ["\u4e0a\u7ebf", "\u8bf7\u5047", "\u71ac\u591c\u8fdf\u5230"],
-  adminPassword: "999",
+  adminPassword: "",
   sheetBackupEnabled: true,
   backupCleanupEnabled: false,
   autoAudit: true,
@@ -76,8 +76,6 @@ function authTokens(extraTokens = []) {
   return [
     process.env.TEAM_SYNC_TOKEN,
     process.env.APP_PASSWORD,
-    process.env.CLOUD_BACKUP_TOKEN,
-    process.env.BACKUP_TOKEN,
     ...extraTokens
   ].filter(Boolean).map(String);
 }
@@ -141,7 +139,7 @@ function normalize(source) {
     memberQuotas: loaded.memberQuotas && typeof loaded.memberQuotas === "object" ? clone(loaded.memberQuotas) : {},
     dailyQuotas: loaded.dailyQuotas && typeof loaded.dailyQuotas === "object" ? clone(loaded.dailyQuotas) : {},
     checkinOptions,
-    adminPassword: String(loaded.adminPassword || process.env.APP_PASSWORD || defaultData.adminPassword),
+    adminPassword: String(loaded.adminPassword || defaultData.adminPassword),
     sheetBackupEnabled: loaded.sheetBackupEnabled !== false,
     backupCleanupEnabled: loaded.backupCleanupEnabled === true,
     autoAudit: loaded.autoAudit !== false,
@@ -299,7 +297,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
     merged.checkinOptions = clone(local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(local.quota || 0);
-    merged.adminPassword = String(local.adminPassword || process.env.APP_PASSWORD || "999");
+    merged.adminPassword = String(local.adminPassword || "");
     merged.sheetBackupEnabled = local.sheetBackupEnabled !== false;
     merged.backupCleanupEnabled = local.backupCleanupEnabled === true;
     merged.autoAudit = local.autoAudit !== false;
@@ -316,7 +314,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
     merged.checkinOptions = clone(remote.checkinOptions || local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(remote.quota ?? local.quota ?? 0);
-    merged.adminPassword = String(remote.adminPassword || local.adminPassword || process.env.APP_PASSWORD || "999");
+    merged.adminPassword = String(remote.adminPassword || local.adminPassword || "");
     merged.sheetBackupEnabled = remote.sheetBackupEnabled !== false;
     merged.backupCleanupEnabled = remote.backupCleanupEnabled === true;
     merged.autoAudit = remote.autoAudit !== false;
@@ -520,9 +518,8 @@ module.exports = async function handler(req, res) {
     if (!sql) return send(res, 503, { ok: false, error: "Vercel 还没有配置 DATABASE_URL 或 POSTGRES_URL。" });
     await ensureSchema(sql);
     const state = await readState(sql);
-    const statePassword = state?.data?.adminPassword ? String(state.data.adminPassword) : "";
-    if (!authTokens([statePassword]).length) return send(res, 503, { ok: false, error: "Vercel 还没有配置 TEAM_SYNC_TOKEN 或 APP_PASSWORD。" });
-    if (!hasValidToken(req, [statePassword])) return send(res, 401, { ok: false, error: "云同步口令不正确。" });
+    if (!authTokens().length) return send(res, 503, { ok: false, error: "Vercel 还没有配置 TEAM_SYNC_TOKEN 或 APP_PASSWORD。" });
+    if (!hasValidToken(req)) return send(res, 401, { ok: false, error: "云同步口令不正确。" });
 
     if (req.method === "GET") {
       return send(res, 200, {
