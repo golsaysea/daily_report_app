@@ -86,6 +86,7 @@ let showAllEntryItems = false;
 let appUnlocked = false;
 let collapsedGroups = JSON.parse(localStorage.getItem("dailyReportCollapsedGroups") || "{}");
 let lastTypingAt = 0;
+let sharedReplicaCount = 0;
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Number(n || 0).toLocaleString("zh-CN", { maximumFractionDigits: 3 });
 const recordKey = () => `${currentDate}|${currentMember}`;
@@ -94,6 +95,17 @@ const syncPollMs = 3000;
 const cloudDbPollMs = 60000;
 const recordCloudSaveDelayMs = 8000;
 const cloudDbQuotaPauseMs = 6 * 60 * 60 * 1000;
+const sharedReplicaDirName = "daily_report_clients";
+const clientId = loadClientId();
+function loadClientId() {
+  const saved = localStorage.getItem("dailyReportClientId");
+  if (saved) return saved;
+  const next = typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `client_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  localStorage.setItem("dailyReportClientId", next);
+  return next;
+}
 function todayLocalKey() {
   const now = new Date();
   return dateKeyFromDate(now);
@@ -506,6 +518,7 @@ async function persistEverywhere(mode = "records") {
   const remoteData = await readRemoteData().catch(() => null);
   data = mergeCloudData(remoteData, data, mode);
   persistLocal();
+  const clientReplicaPath = await writeClientReplicaToSharedFolder(data).catch(() => null);
   const cloudDbResult = await saveCloudDatabaseData(mode, true);
   if (desktopApp?.isDesktop) {
     const result = await desktopApp.writeCloudData(data);
@@ -518,6 +531,10 @@ async function persistEverywhere(mode = "records") {
     return { written: true, cloudDbWritten: cloudDbResult?.written === true, folderWritten: true };
   }
   if (!fileHandle) {
+    if (clientReplicaPath) {
+      setSyncStatus("已写入共享成员副本，未写入总文件");
+      return { written: true, cloudDbWritten: cloudDbResult?.written === true, folderWritten: true, clientReplicaWritten: true };
+    }
     if (cloudDbResult?.written) {
       setSyncStatus("已写入 Vercel 云库，未选择文件夹备份");
       return { written: true, cloudDbWritten: true, folderWritten: false };
@@ -539,6 +556,10 @@ async function persistEverywhere(mode = "records") {
     if (cloudDbResult?.written) {
       setSyncStatus("已写入 Vercel 云库，文件夹备份写入失败");
       return { written: true, cloudDbWritten: true, folderWritten: false, reason: "folder-write-failed" };
+    }
+    if (clientReplicaPath) {
+      setSyncStatus("已写入共享成员副本，总文件暂时不可写");
+      return { written: true, cloudDbWritten: false, folderWritten: true, clientReplicaWritten: true, reason: "client-replica-written" };
     }
     setSyncStatus("写入失败，已保存到本地缓存");
     return { written: false, cloudDbWritten: false, folderWritten: false, reason: cloudDbResult?.reason || "write-failed" };
@@ -610,6 +631,60 @@ async function hasCloudPermission(dir) {
   const options = { mode: "readwrite" };
   if ((await dir.queryPermission?.(options)) === "granted") return true;
   return (await dir.requestPermission?.(options)) === "granted";
+}
+function clientReplicaFileName() {
+  const safeId = String(clientId || "client").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80);
+  return `${safeId}.json`;
+}
+async function writeClientReplicaToDirectory(dir, snapshot = data) {
+  if (!dir || !(await hasCloudPermission(dir))) return null;
+  const replicaDir = await dir.getDirectoryHandle(sharedReplicaDirName, { create: true });
+  const handle = await replicaDir.getFileHandle(clientReplicaFileName(), { create: true });
+  const payload = {
+    version: 1,
+    client_id: clientId,
+    actor: currentMember,
+    updated_at: new Date().toISOString(),
+    record_count: Object.keys(snapshot.records || {}).length,
+    data: normalize(snapshot)
+  };
+  const writable = await handle.createWritable();
+  await writable.write(JSON.stringify(payload, null, 2));
+  await writable.close();
+  return `${dir.name || "共享文件夹"}\\${sharedReplicaDirName}\\${clientReplicaFileName()}`;
+}
+async function writeClientReplicaToSharedFolder(snapshot = data) {
+  if (!cloudDirHandle) return null;
+  return writeClientReplicaToDirectory(cloudDirHandle, snapshot);
+}
+async function readClientReplicasFromDirectory(dir) {
+  if (!dir || !(await hasCloudPermission(dir))) return [];
+  let replicaDir = null;
+  try {
+    replicaDir = await dir.getDirectoryHandle(sharedReplicaDirName, { create: false });
+  } catch {
+    return [];
+  }
+  if (typeof replicaDir.entries !== "function") return [];
+  const replicas = [];
+  for await (const [name, handle] of replicaDir.entries()) {
+    if (handle.kind !== "file" || !name.toLowerCase().endsWith(".json")) continue;
+    try {
+      const file = await handle.getFile();
+      const text = await file.text();
+      if (!text.trim()) continue;
+      const payload = JSON.parse(text);
+      const replicaData = payload?.data || payload;
+      replicas.push({
+        label: `${payload?.actor || "成员副本"} · ${name}`,
+        data: normalize(replicaData),
+        updated_at: payload?.updated_at || ""
+      });
+    } catch (error) {
+      console.warn(error);
+    }
+  }
+  return replicas.sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
 }
 async function useCloudDirectory(dir, shouldSave = true) {
   if (!(await hasCloudPermission(dir))) {
@@ -1214,7 +1289,7 @@ function renderAdminCenterPanel() {
   box.innerHTML = `
     <div><span>中心副本</span><strong>${recordCount} 条 · ${memberCount} 人</strong></div>
     <div><span>本机时间</span><strong>${escapeHtml(cachedAt)}</strong></div>
-    <div><span>可合并来源</span><strong>${sourceOk}/${sourceDirHandles.length} 个来源</strong></div>
+    <div><span>可合并来源</span><strong>${sourceOk}/${sourceDirHandles.length} 个来源 · ${sharedReplicaCount} 个成员副本</strong></div>
     <div><span>共享落点</span><strong>${escapeHtml(adminCenterTargetText())}</strong></div>
   `;
 }
@@ -3244,6 +3319,15 @@ async function buildAdminCenterSnapshot() {
   saveFormSilently();
   let merged = normalize(data);
   let sourceCount = 0;
+  sharedReplicaCount = 0;
+  if (cloudDirHandle) {
+    const replicas = await readClientReplicasFromDirectory(cloudDirHandle);
+    sharedReplicaCount += replicas.length;
+    replicas.forEach((replica) => {
+      merged = mergeAdminCenterData(merged, replica.data);
+      sourceCount += 1;
+    });
+  }
   if (sourceDirHandles.length) {
     await refreshSourceDatasets();
     sourceDatasets.forEach((source) => {
@@ -3256,6 +3340,12 @@ async function buildAdminCenterSnapshot() {
     try {
       merged = mergeAdminCenterData(merged, await readDirectoryReport(summaryDirHandle));
       sourceCount += 1;
+      const replicas = await readClientReplicasFromDirectory(summaryDirHandle);
+      sharedReplicaCount += replicas.length;
+      replicas.forEach((replica) => {
+        merged = mergeAdminCenterData(merged, replica.data);
+        sourceCount += 1;
+      });
     } catch (error) {
       console.warn(error);
     }
@@ -3298,6 +3388,8 @@ async function writeAdminCenterToSharedTargets() {
     lastCloudText = nextText;
     written.push(cloudLocationLabel || "备用文件");
   }
+  const replicaPath = await writeClientReplicaToSharedFolder(data).catch(() => null);
+  if (replicaPath) written.push(replicaPath);
   if (summaryDirHandle) {
     await writeDirectoryReport(summaryDirHandle, data);
     written.push(`${summaryLocationLabel || "汇总文件夹"}\\report_data.json`);
