@@ -150,6 +150,9 @@ function cloudApiUrl(path) {
   const nextPath = path.startsWith("/") ? path : `/${path}`;
   return cloudSyncEndpoint ? `${cloudSyncEndpoint}${nextPath}` : nextPath;
 }
+function defaultCloudApiUrl(path) {
+  return path.startsWith("/") ? path : `/${path}`;
+}
 function syncCloudEndpointInputs() {
   if ($("cloudSyncEndpointInput")) $("cloudSyncEndpointInput").value = cloudSyncEndpoint;
   if ($("cloudSyncEndpointAdminInput")) $("cloudSyncEndpointAdminInput").value = cloudSyncEndpoint;
@@ -967,6 +970,18 @@ async function callCloudData(action, payload = {}, token = appSessionPassword) {
   }
   return result;
 }
+async function verifyVercelPassword(candidate) {
+  const response = await fetch(defaultCloudApiUrl("/api/app-auth"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password: candidate })
+  });
+  const text = await response.text();
+  const result = text ? JSON.parse(text) : {};
+  if (response.ok && result.ok) return { ok: true, source: "vercel-env" };
+  if (response.status !== 404) return { ok: false, error: result.error || "密码不正确" };
+  return { ok: false, error: "未检测到 Vercel 登录接口" };
+}
 async function verifyAppPassword(password) {
   const candidate = String(password || "").trim();
   if (!candidate) return { ok: false, error: "请输入应用密码" };
@@ -984,9 +999,31 @@ async function verifyAppPassword(password) {
     });
     const text = await response.text();
     const result = text ? JSON.parse(text) : {};
-    if (response.ok && result.ok) return { ok: true, source: "vercel-env" };
-    if (response.status !== 404) return { ok: false, error: result.error || "密码不正确" };
+    if (response.ok && result.ok) return { ok: true, source: cloudSyncEndpoint ? "worker-env" : "vercel-env" };
+    if (response.status !== 404) {
+      if (cloudSyncEndpoint && window.location.protocol !== "file:") {
+        const fallback = await verifyVercelPassword(candidate).catch(() => null);
+        if (fallback?.ok) {
+          cloudSyncEndpoint = "";
+          cloudDbLastSeenSha = "";
+          setCloudDbStatus("Worker 登录失败，已临时切回 Vercel");
+          syncCloudEndpointInputs();
+          return { ok: true, source: "vercel-fallback" };
+        }
+      }
+      return { ok: false, error: result.error || "密码不正确" };
+    }
   } catch {
+    if (cloudSyncEndpoint && window.location.protocol !== "file:") {
+      const fallback = await verifyVercelPassword(candidate).catch(() => null);
+      if (fallback?.ok) {
+        cloudSyncEndpoint = "";
+        cloudDbLastSeenSha = "";
+        setCloudDbStatus("Worker 不可用，已临时切回 Vercel");
+        syncCloudEndpointInputs();
+        return { ok: true, source: "vercel-fallback" };
+      }
+    }
     // Older deployments may not have the standalone auth endpoint yet; cloud data auth is the fallback.
   }
   const cloudResult = await pullCloudDatabaseData({ silent: true, token: candidate, beforeUnlock: true });
@@ -3115,7 +3152,8 @@ function render() {
 function setView(view) {
   if (view === "admin" && !adminUnlocked) {
     const password = prompt("请输入管理员密码");
-    if (!data.adminPassword || password !== String(data.adminPassword)) {
+    const ok = (data.adminPassword && password === String(data.adminPassword)) || (appSessionPassword && password === appSessionPassword);
+    if (!ok) {
       alert("管理员密码不正确。");
       return;
     }
@@ -3322,7 +3360,8 @@ async function refreshSourceDatasets() {
 }
 async function unlockSuperAdmin() {
   const password = prompt("请输入管理员密码以提升高级管理员权限");
-  if (!data.adminPassword || password !== String(data.adminPassword)) return alert("管理员密码不正确。");
+  const ok = (data.adminPassword && password === String(data.adminPassword)) || (appSessionPassword && password === appSessionPassword);
+  if (!ok) return alert("管理员密码不正确。");
   superAdminUnlocked = true;
   document.body.classList.add("super-admin");
   activeReportSource = sourceDirHandles.length ? "all" : "current";
