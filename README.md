@@ -56,6 +56,8 @@ Vercel 云同步会使用同一张最新状态表：
 
 Worker 提供 `/api/app-auth` 和 `/api/cloud-data`，会自动创建 `daily_report_cloud_state` 和 `daily_report_cloud_events` 两张 D1 表。写入 D1 的 `data` 字段是 AES-GCM 加密包；Worker 用 `CLOUD_SYNC_ENCRYPTION_KEY` 解密后再与前端同步。管理员可以在 Vercel 和 Cloudflare 两个云之间切换地址，必要时用“中心回灌云同步”或保存配置把本地中心写回当前选中的云同步通道。
 
+Vercel 的 CSP 已默认允许 `https://*.workers.dev`。如果 Worker 使用自定义域名，需要把该域名加入 `vercel.json` 的 `connect-src` 后重新部署。
+
 ## 云数据库备份（可选）
 
 这个功能用于管理员额外保留备份快照，不会把数据库口令写进代码仓库，也不会缓存在浏览器本地。
