@@ -72,6 +72,7 @@ let mixedTableGroup = "";
 let mixedTableMember = "";
 let mixedTableRangeMode = "week";
 let mixedExportMonths = [];
+let mixedExportYear = Number(monthKeyFromDateKey(todayLocalKey()).slice(0, 4));
 let mixedCheckinGroup = "";
 let mixedCheckinMember = "";
 let checkinViewGroup = "";
@@ -1607,6 +1608,10 @@ function mixedExportMonthLabel(monthKey) {
   const month = Number(String(monthKey || "").slice(5, 7)) || "";
   return `${month}月份`;
 }
+function mixedExportYearMonths(year = mixedExportYear) {
+  const safeYear = Number(year) || Number(monthKeyFromDateKey(currentDate).slice(0, 4));
+  return Array.from({ length: 12 }, (_, index) => `${safeYear}-${String(index + 1).padStart(2, "0")}`).reverse();
+}
 function periodMonthForDay(dayKey, mode = mixedTableRangeMode) {
   if (mode === "small-month") return cutoffEndMonthFor(dayKey, 14);
   if (mode === "month") return cutoffEndMonthFor(dayKey, 23);
@@ -1618,11 +1623,7 @@ function mixedPeriodRangeForMonth(monthKey, mode = mixedTableRangeMode) {
   return { label: `${mixedExportMonthLabel(monthKey)}自然月`, start: `${monthKey}-01`, end: dateKeyForMonthDay(monthKey, daysInMonth(monthKey)) };
 }
 function availableMixedExportMonths(report, mode = mixedTableRangeMode) {
-  const months = new Set([periodMonthForDay(currentDate, mode)]);
-  Object.values(report.records || {}).forEach((record) => {
-    if (record?.date) months.add(periodMonthForDay(record.date, mode));
-  });
-  return Array.from(months).filter(Boolean).sort().reverse();
+  return mixedExportYearMonths(mixedExportYear);
 }
 function selectedMixedExportMonths(report) {
   if (mixedTableRangeMode !== "small-month" && mixedTableRangeMode !== "month") return [];
@@ -1643,12 +1644,22 @@ function renderMixedExportMonths(report) {
   box.classList.remove("hidden");
   const available = availableMixedExportMonths(report, mixedTableRangeMode);
   const selected = new Set(selectedMixedExportMonths(report));
-  box.innerHTML = available.map((month) => `
+  box.innerHTML = `
+    <label class="mixed-month-option mixed-year-option">
+      <span>年份</span>
+      <input id="mixedExportYearInput" type="number" min="2000" max="2100" step="1" value="${Number(mixedExportYear) || Number(monthKeyFromDateKey(currentDate).slice(0, 4))}">
+    </label>
+    ${available.map((month) => `
     <label class="mixed-month-option">
       <input type="checkbox" value="${escapeAttr(month)}" ${selected.has(month) ? "checked" : ""}>
       <span>${escapeHtml(mixedExportMonthLabel(month))}</span>
     </label>
-  `).join("");
+  `).join("")}`;
+  $("mixedExportYearInput").onchange = () => {
+    mixedExportYear = Number($("mixedExportYearInput").value || mixedExportYear);
+    mixedExportMonths = [`${mixedExportYear}-${String(Number(monthKeyFromDateKey(currentDate).slice(5, 7)) || 1).padStart(2, "0")}`];
+    renderMixedExportMonths(report);
+  };
   box.querySelectorAll("input[type='checkbox']").forEach((input) => {
     input.onchange = () => {
       mixedExportMonths = Array.from(box.querySelectorAll("input[type='checkbox']:checked")).map((item) => item.value).sort().reverse();
@@ -2536,7 +2547,7 @@ function overviewGroupBriefLine(row, itemNames) {
   ].filter(Boolean);
   return parts.join(" ");
 }
-function buildOverviewGroupBrief(group, report = reportData()) {
+function overviewGroupBriefRows(group, report = reportData()) {
   const range = overviewRangeInfo();
   const days = buildDateRange(range.start, range.end);
   const itemNames = configuredItems();
@@ -2549,22 +2560,41 @@ function buildOverviewGroupBrief(group, report = reportData()) {
     ? behindRows.map((row) => overviewGroupBriefLine(row, itemNames))
     : ["全部成员达标，暂无未完成原因。"];
   return [
-    `${group} ${range.label}报数`,
-    `时间：${rangeText(range)}`,
-    `定额：${fmt(totalQuota)}`,
-    `实际完成数：${fmt(totalWeighted)}`,
-    `差额：${totalDiff >= 0 ? "+" : ""}${fmt(totalDiff)}`,
-    "差额多的是谁，原因是什么：",
-    ...reasonLines
-  ].join("\n");
+    [styledCell(`${group} ${range.label}报数｜${rangeText(range)}`, "sTitle", { mergeAcross: 5 })],
+    ["小组", "范围", "定额", "实际完成数", "差额", "差额多的是谁，原因是什么"].map((label) => styledCell(label, "sHeader")),
+    [
+      styledCell(group, "sDate"),
+      styledCell(rangeText(range), "sItem"),
+      styledCell(totalQuota, "sQuota"),
+      styledCell(totalWeighted, "sTotal"),
+      styledCell(totalDiff, totalDiff >= 0 ? "sDiffGood" : "sDiffBad"),
+      styledCell(reasonLines.join("\n"), "sNote")
+    ]
+  ];
+}
+function buildOverviewBriefWorkbook(groups, report = reportData()) {
+  const rows = groups.flatMap((group, index) => {
+    const groupRows = overviewGroupBriefRows(group, report);
+    return index < groups.length - 1 ? [...groupRows, [styledCell("", "sSpacer", { mergeAcross: 5 })]] : groupRows;
+  });
+  return {
+    rows: rows.length ? rows : [[styledCell("暂无可导出小组", "sTitle", { mergeAcross: 5 })]],
+    columns: [120, 150, 90, 110, 90, 360]
+  };
 }
 function exportOverviewGroupBrief(group) {
   const report = selectedReportData();
-  const text = withReportData(report, () => buildOverviewGroupBrief(group, report));
+  const workbook = withReportData(report, () => buildOverviewBriefWorkbook([group], report));
   const range = overviewRangeInfo();
   const safeGroup = String(group || "group").replace(/[\\/:*?"<>|]/g, "_");
-  const blob = new Blob([`\ufeff${text}`], { type: "text/plain;charset=utf-8" });
-  downloadBlob(blob, `overview_${safeGroup}_${range.start}_${range.end}.txt`);
+  downloadBlob(buildXlsxWorkbook(`${safeGroup}简报`, workbook.rows, workbook.columns), `overview_${safeGroup}_${range.start}_${range.end}.xlsx`);
+}
+function exportSelectedOverviewBriefs() {
+  const report = selectedReportData();
+  const groups = withReportData(report, () => selectedOverviewGroups(report));
+  const workbook = withReportData(report, () => buildOverviewBriefWorkbook(groups, report));
+  const range = overviewRangeInfo();
+  downloadBlob(buildXlsxWorkbook("批量简报", workbook.rows, workbook.columns), `overview_briefs_${range.start}_${range.end}.xlsx`);
 }
 function selectOverviewMember(member, report = reportData()) {
   const group = report.memberGroups?.[member] || report.groups?.[0] || "__all__";
@@ -4069,7 +4099,7 @@ function mixedExportStatusStyle(status) {
   return "sItem";
 }
 function mixedExportBlock(member, index, group, days, itemNames, periods, report) {
-  const header = ["日期", ...periods.map((period) => `${period.label}打卡`), ...itemNames, "原始", "换算", "定额", "差额", "状态", "备注"];
+  const header = [`${index + 1} ${member}`, ...periods.map((period) => `${period.label}打卡`), ...itemNames, "原始", "换算", "定额", "差额", "状态", "备注"];
   const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
   const records = days.map((day) => {
     const rec = recordForReport(report, day, member);
@@ -4350,6 +4380,7 @@ function bindEvents() {
     overviewRangeMode = $("overviewRangeSelect").value || "day";
     renderOverview();
   };
+  $("exportOverviewBriefsBtn").onclick = exportSelectedOverviewBriefs;
   ["monthInput", "overviewMonthInput"].forEach((id) => {
     $(id).onchange = () => selectDate(sameDayInMonth($(id).value || monthKeyFromDateKey(currentDate)));
   });
