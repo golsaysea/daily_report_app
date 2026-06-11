@@ -285,6 +285,14 @@ function mergeDailyQuotas(remoteDaily = {}, localDaily = {}, mode = "records") {
   return merged;
 }
 
+function clearActiveDeletedMembers(report) {
+  const deleted = { ...(report.deletedMembers || {}) };
+  (report.members || []).forEach((member) => {
+    if (deleted[member]) delete deleted[member];
+  });
+  return deleted;
+}
+
 function mergeCloudData(remoteSource, localSource, mode = "records") {
   if (!remoteSource) return normalize(localSource);
   const remote = normalize(remoteSource);
@@ -330,10 +338,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
   recordKeys.forEach((key) => {
     merged.records[key] = newerRecord(remote.records?.[key], local.records?.[key], "second", merged.rules);
   });
-  Object.keys(merged.records || {}).forEach((key) => {
-    const member = merged.records[key]?.member || String(key).split("|").slice(1).join("|");
-    if (merged.deletedMembers?.[member]) delete merged.records[key];
-  });
+  merged.deletedMembers = clearActiveDeletedMembers(merged);
   merged.updated_at = new Date().toISOString();
   return normalize(merged);
 }

@@ -404,6 +404,13 @@ function mergeDailyQuotas(remoteDaily = {}, localDaily = {}, mode = "records") {
   });
   return merged;
 }
+function clearActiveDeletedMembers(report) {
+  const deleted = { ...(report.deletedMembers || {}) };
+  (report.members || []).forEach((member) => {
+    if (deleted[member]) delete deleted[member];
+  });
+  return deleted;
+}
 function mergeCloudData(remoteSource, localSource, mode = "records") {
   if (!remoteSource) return normalize(localSource);
   const remote = normalize(remoteSource);
@@ -449,10 +456,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
   recordKeys.forEach((key) => {
     merged.records[key] = newerRecord(remote.records?.[key], local.records?.[key], "second", merged.rules);
   });
-  Object.keys(merged.records || {}).forEach((key) => {
-    const member = merged.records[key]?.member || String(key).split("|").slice(1).join("|");
-    if (merged.deletedMembers?.[member]) delete merged.records[key];
-  });
+  merged.deletedMembers = clearActiveDeletedMembers(merged);
   return normalize(merged);
 }
 function mergeSummaryData(baseSource, sourceData) {
@@ -1422,11 +1426,12 @@ function groupMembers(group) {
 }
 function reportMembers(report = reportData()) {
   const members = new Set(report.members || []);
+  const deletedMembers = clearActiveDeletedMembers(report);
   Object.values(report.records || {}).forEach((record) => {
-    if (report.deletedMembers?.[record?.member]) return;
+    if (deletedMembers?.[record?.member]) return;
     if (record?.member) members.add(record.member);
   });
-  Object.keys(report.deletedMembers || {}).forEach((member) => members.delete(member));
+  Object.keys(deletedMembers || {}).forEach((member) => members.delete(member));
   return Array.from(members).sort((a, b) => {
     const ai = (report.members || []).indexOf(a);
     const bi = (report.members || []).indexOf(b);
@@ -2366,7 +2371,7 @@ function addMember(name, groupName = data.groups[0] || "1组") {
 }
 function removeMember(name) {
   if (data.members.length <= 1) return alert("至少保留一个成员。");
-  if (!confirm(`确定删除成员“${name}”？会同时删除这个成员的历史记录、定额和分组配置。`)) return;
+  if (!confirm(`确定隐藏成员“${name}”？会移出成员列表并保留历史记录，之后重新添加同名成员可恢复显示。`)) return;
   data.members = data.members.filter((item) => item !== name);
   data.deletedMembers = data.deletedMembers || {};
   data.deletedMembers[name] = new Date().toISOString();
@@ -2375,9 +2380,6 @@ function removeMember(name) {
   delete data.memberItems[name];
   Object.values(data.dailyQuotas || {}).forEach((entry) => {
     if (entry.members) delete entry.members[name];
-  });
-  Object.keys(data.records || {}).forEach((key) => {
-    if (data.records[key]?.member === name || key.endsWith(`|${name}`)) delete data.records[key];
   });
   if (currentMember === name) currentMember = data.members[0];
   loadForm();

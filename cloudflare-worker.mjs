@@ -194,6 +194,14 @@ function mergeDailyQuotas(remoteDaily = {}, localDaily = {}, mode = "records") {
   return merged;
 }
 
+function clearActiveDeletedMembers(report) {
+  const deleted = { ...(report.deletedMembers || {}) };
+  (report.members || []).forEach((member) => {
+    if (deleted[member]) delete deleted[member];
+  });
+  return deleted;
+}
+
 function mergeCloudData(remoteSource, localSource, mode = "records") {
   if (!remoteSource) return normalize(localSource);
   const remote = normalize(remoteSource);
@@ -212,6 +220,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.checkinOptions = clone(local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(local.quota || 0);
     merged.adminPassword = String(local.adminPassword || "");
+    merged.deletedMembers = clone(local.deletedMembers || {});
   } else {
     merged.rules = clone(remote.rules || local.rules);
     merged.members = clone(remote.members || local.members);
@@ -224,11 +233,13 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.checkinOptions = clone(remote.checkinOptions || local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(remote.quota ?? local.quota ?? 0);
     merged.adminPassword = String(remote.adminPassword || local.adminPassword || "");
+    merged.deletedMembers = { ...(local.deletedMembers || {}), ...(remote.deletedMembers || {}) };
   }
   merged.records = {};
   recordKeys.forEach((key) => {
     merged.records[key] = newerRecord(remote.records?.[key], local.records?.[key], "second", merged.rules);
   });
+  merged.deletedMembers = clearActiveDeletedMembers(merged);
   return normalize(merged);
 }
 
