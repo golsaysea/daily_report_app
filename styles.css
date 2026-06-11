@@ -192,6 +192,10 @@ tr:last-child td { border-bottom: 0; }
 .mixed-table .mixed-member { background: #fff4f4; font-weight: 900; white-space: nowrap; }
 .mixed-checkin-table { min-width: 620px; }
 .mixed-table .mixed-summary-row th { background: #d85252; color: white; }
+.mixed-export-months { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 10px; }
+.mixed-export-months.hidden { display: none; }
+.mixed-month-option { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: #fbfcf8; border-radius: 8px; padding: 7px 10px; font-size: 13px; font-weight: 900; }
+.mixed-month-option input { width: 16px; height: 16px; margin: 0; }
 .rule-row, .quota-row { display: grid; grid-template-columns: 1fr 110px 38px; gap: 8px; align-items: center; margin-bottom: 8px; }
 .quota-row { grid-template-columns: minmax(120px, 1fr) 110px 110px 38px; }
 .quota-edit input { width: 100%; min-width: 120px; border: 0; background: transparent; font: inherit; font-weight: 900; color: inherit; outline: 0; }

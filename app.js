@@ -70,7 +70,8 @@ let overviewDetailGroup = "";
 let overviewDetailMember = "";
 let mixedTableGroup = "";
 let mixedTableMember = "";
-let mixedTableRangeMode = "default";
+let mixedTableRangeMode = "week";
+let mixedExportMonths = [];
 let mixedCheckinGroup = "";
 let mixedCheckinMember = "";
 let checkinViewGroup = "";
@@ -1564,10 +1565,24 @@ function cutoffPeriodRange(dayKey, cutoffDay) {
   const monthKey = monthKeyFromDateKey(dayKey);
   const day = Number(String(dayKey || "").slice(8, 10)) || 1;
   const endMonth = day <= cutoffDay ? monthKey : shiftMonthKey(monthKey, 1);
+  return cutoffPeriodRangeForMonth(endMonth, cutoffDay);
+}
+function cutoffPeriodRangeForMonth(endMonth, cutoffDay) {
   return {
     start: dateKeyForMonthDay(shiftMonthKey(endMonth, -1), cutoffDay),
     end: dateKeyForMonthDay(endMonth, cutoffDay)
   };
+}
+function cutoffEndMonthFor(dayKey, cutoffDay) {
+  const monthKey = monthKeyFromDateKey(dayKey);
+  const day = Number(String(dayKey || "").slice(8, 10)) || 1;
+  return day <= cutoffDay ? monthKey : shiftMonthKey(monthKey, 1);
+}
+function mixedRangeInfo(dayKey = currentDate) {
+  if (mixedTableRangeMode === "small-month") return { label: "小月度汇总", cutoffDay: 14, endMonth: cutoffEndMonthFor(dayKey, 14), ...cutoffPeriodRange(dayKey, 14) };
+  if (mixedTableRangeMode === "month") return { label: "月度汇总", cutoffDay: 23, endMonth: cutoffEndMonthFor(dayKey, 23), ...cutoffPeriodRange(dayKey, 23) };
+  if (mixedTableRangeMode === "custom") return { label: "自定义", start: $("mixedTableStart")?.value || dayKey, end: $("mixedTableEnd")?.value || dayKey };
+  return { label: "本周", ...weekRangeFor(dayKey) };
 }
 function overviewRangeInfo() {
   if (overviewRangeMode === "day") return { label: "今日", start: currentDate, end: currentDate };
@@ -1582,11 +1597,63 @@ function applyMixedTableDefaultRange() {
   const startInput = $("mixedTableStart");
   const endInput = $("mixedTableEnd");
   if (!startInput || !endInput) return;
-  if (mixedTableRangeMode !== "default" && startInput.value && endInput.value) return;
-  const range = weekRangeFor(currentDate);
+  if (mixedTableRangeMode === "custom" && startInput.value && endInput.value) return;
+  const range = mixedRangeInfo(currentDate);
   startInput.value = range.start;
   endInput.value = range.end;
-  mixedTableRangeMode = "default";
+  if ($("mixedTableRangeMode")) $("mixedTableRangeMode").value = mixedTableRangeMode;
+}
+function mixedExportMonthLabel(monthKey) {
+  const month = Number(String(monthKey || "").slice(5, 7)) || "";
+  return `${month}月份`;
+}
+function periodMonthForDay(dayKey, mode = mixedTableRangeMode) {
+  if (mode === "small-month") return cutoffEndMonthFor(dayKey, 14);
+  if (mode === "month") return cutoffEndMonthFor(dayKey, 23);
+  return monthKeyFromDateKey(dayKey);
+}
+function mixedPeriodRangeForMonth(monthKey, mode = mixedTableRangeMode) {
+  if (mode === "small-month") return { label: `${mixedExportMonthLabel(monthKey)}小月度汇总`, ...cutoffPeriodRangeForMonth(monthKey, 14) };
+  if (mode === "month") return { label: `${mixedExportMonthLabel(monthKey)}月度汇总`, ...cutoffPeriodRangeForMonth(monthKey, 23) };
+  return { label: `${mixedExportMonthLabel(monthKey)}自然月`, start: `${monthKey}-01`, end: dateKeyForMonthDay(monthKey, daysInMonth(monthKey)) };
+}
+function availableMixedExportMonths(report, mode = mixedTableRangeMode) {
+  const months = new Set([periodMonthForDay(currentDate, mode)]);
+  Object.values(report.records || {}).forEach((record) => {
+    if (record?.date) months.add(periodMonthForDay(record.date, mode));
+  });
+  return Array.from(months).filter(Boolean).sort().reverse();
+}
+function selectedMixedExportMonths(report) {
+  if (mixedTableRangeMode !== "small-month" && mixedTableRangeMode !== "month") return [];
+  const available = availableMixedExportMonths(report, mixedTableRangeMode);
+  if (!mixedExportMonths.length) mixedExportMonths = [periodMonthForDay(currentDate, mixedTableRangeMode)];
+  const selected = mixedExportMonths.filter((month) => available.includes(month));
+  if (selected.length) return selected.sort().reverse();
+  return [available[0] || periodMonthForDay(currentDate, mixedTableRangeMode)].filter(Boolean);
+}
+function renderMixedExportMonths(report) {
+  const box = $("mixedExportMonths");
+  if (!box) return;
+  if (mixedTableRangeMode !== "small-month" && mixedTableRangeMode !== "month") {
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    return;
+  }
+  box.classList.remove("hidden");
+  const available = availableMixedExportMonths(report, mixedTableRangeMode);
+  const selected = new Set(selectedMixedExportMonths(report));
+  box.innerHTML = available.map((month) => `
+    <label class="mixed-month-option">
+      <input type="checkbox" value="${escapeAttr(month)}" ${selected.has(month) ? "checked" : ""}>
+      <span>${escapeHtml(mixedExportMonthLabel(month))}</span>
+    </label>
+  `).join("");
+  box.querySelectorAll("input[type='checkbox']").forEach((input) => {
+    input.onchange = () => {
+      mixedExportMonths = Array.from(box.querySelectorAll("input[type='checkbox']:checked")).map((item) => item.value).sort().reverse();
+    };
+  });
 }
 function applyCheckinDefaultRange() {
   const startInput = $("checkinViewStart");
@@ -2602,7 +2669,9 @@ function renderMixedOverviewTable() {
   const report = reportData();
   if (!$("mixedTableHead")) return;
   mixedTableGroup = renderGroupOnlySelect("mixedTableGroup", mixedTableGroup, report);
+  if ($("mixedTableRangeMode")) $("mixedTableRangeMode").value = mixedTableRangeMode;
   applyMixedTableDefaultRange();
+  renderMixedExportMonths(report);
   let start = $("mixedTableStart").value || currentDate;
   let end = $("mixedTableEnd").value || currentDate;
   if (start > end) {
@@ -2624,7 +2693,7 @@ function renderMixedOverviewTable() {
       renderMixedOverviewTable();
     };
   });
-  const days = buildDateRange(start, end);
+  const days = buildDateRange(start, end).reverse();
   const itemNames = groupVisibleItems(mixedTableGroup, report);
   const editable = report === data && data.members.includes(member);
   const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
@@ -2764,7 +2833,7 @@ function renderMixedCheckinTable() {
   const fallbackGroup = (mixedTableGroup && mixedTableGroup !== "__all__" && groups.includes(mixedTableGroup)) ? mixedTableGroup : groups[0] || "";
   const group = renderGroupOnlySelect("mixedCheckinGroup", groups.includes(mixedCheckinGroup) ? mixedCheckinGroup : fallbackGroup, report);
   mixedCheckinGroup = group;
-  const days = buildDateRange(start, end);
+  const days = buildDateRange(start, end).reverse();
   const groupMembers = membersForGroupValue(group, report);
   if (mixedCheckinMember && !groupMembers.includes(mixedCheckinMember)) mixedCheckinMember = "";
   renderValueTabs(
@@ -3616,7 +3685,10 @@ function rowsToStyledWorksheet(name, rows, columns = []) {
     <Worksheet ss:Name="${xmlEscape(sheetNameSafe(name))}">
       <Table>
         ${columns.map((width) => `<Column ss:Width="${Number(width) || 48}"/>`).join("")}
-        ${rows.map((row) => `<Row>${row.map(styledCellXml).join("")}</Row>`).join("")}
+        ${rows.map((rowSpec) => {
+          const row = Array.isArray(rowSpec) ? rowSpec : (rowSpec.cells || []);
+          return `<Row>${row.map(styledCellXml).join("")}</Row>`;
+        }).join("")}
       </Table>
     </Worksheet>
   `;
@@ -3824,7 +3896,14 @@ function xlsxCellXml(cell, rowIndex, colIndex) {
 }
 function rowsToXlsxWorksheet(rows, columns = []) {
   const merges = [];
-  const rowXml = rows.map((row, rowIndex) => {
+  const rowXml = rows.map((rowSpec, rowIndex) => {
+    const row = Array.isArray(rowSpec) ? rowSpec : (rowSpec.cells || []);
+    const attrs = [
+      `r="${rowIndex + 1}"`,
+      rowSpec.outlineLevel ? `outlineLevel="${Number(rowSpec.outlineLevel)}"` : "",
+      rowSpec.hidden ? 'hidden="1"' : "",
+      rowSpec.collapsed ? 'collapsed="1"' : ""
+    ].filter(Boolean).join(" ");
     let colIndex = 1;
     const cells = row.map((cell) => {
       const spec = cell && typeof cell === "object" && !Array.isArray(cell) && Object.prototype.hasOwnProperty.call(cell, "value")
@@ -3836,7 +3915,7 @@ function rowsToXlsxWorksheet(rows, columns = []) {
       colIndex += 1 + Math.max(0, mergeAcross);
       return cellXml;
     }).join("");
-    return `<row r="${rowIndex + 1}">${cells}</row>`;
+    return `<row ${attrs}>${cells}</row>`;
   }).join("");
   const cols = columns.length
     ? `<cols>${columns.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${Math.max(6, Number(width || 48) / 7)}" customWidth="1"/>`).join("")}</cols>`
@@ -3844,6 +3923,7 @@ function rowsToXlsxWorksheet(rows, columns = []) {
   const mergeXml = merges.length ? `<mergeCells count="${merges.length}">${merges.map((ref) => `<mergeCell ref="${ref}"/>`).join("")}</mergeCells>` : "";
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetPr><outlinePr summaryBelow="0" summaryRight="0"/></sheetPr>
   ${cols}
   <sheetData>${rowXml}</sheetData>
   ${mergeXml}
@@ -3910,7 +3990,17 @@ function mixedTableExportRange() {
   let start = $("mixedTableStart")?.value || currentDate;
   let end = $("mixedTableEnd")?.value || currentDate;
   if (start > end) [start, end] = [end, start];
-  return { start, end, days: buildDateRange(start, end) };
+  return { start, end, days: buildDateRange(start, end).reverse() };
+}
+function mixedTableExportPeriods(report) {
+  if (mixedTableRangeMode === "small-month" || mixedTableRangeMode === "month") {
+    return selectedMixedExportMonths(report).map((month) => {
+      const range = mixedPeriodRangeForMonth(month, mixedTableRangeMode);
+      return { month, ...range, days: buildDateRange(range.start, range.end).reverse() };
+    });
+  }
+  const range = mixedTableExportRange();
+  return [{ label: mixedRangeInfo().label, month: monthKeyFromDateKey(range.end), ...range }];
 }
 function mixedExportCheckinStyle(value) {
   const status = checkinStatus(value);
@@ -3973,6 +4063,39 @@ function mixedExportBlock(member, index, group, days, itemNames, periods, report
   ];
   return { rows, blockWidth };
 }
+function mixedExportGroupBlock(days, members, itemNames, report) {
+  const records = days.map((day) => {
+    let weighted = 0;
+    let quota = 0;
+    members.forEach((member) => {
+      const rec = recordForReport(report, day, member);
+      const totals = totalsForItems(rec?.items || {}, itemNames, report);
+      weighted += totals.weighted;
+      quota += memberQuota(member, day);
+    });
+    return { day, weighted, quota, diff: weighted - quota };
+  });
+  const totalWeighted = records.reduce((sum, row) => sum + row.weighted, 0);
+  const totalQuota = records.reduce((sum, row) => sum + row.quota, 0);
+  const totalDiff = totalWeighted - totalQuota;
+  const rows = [
+    [styledCell("全组合计", "sTitle", { mergeAcross: 3 })],
+    ["日期", "全组完成", "全组定额", "全组差额"].map((label) => styledCell(label, "sHeader")),
+    [
+      styledCell("合计", "sDate"),
+      styledCell(totalWeighted, "sTotal"),
+      styledCell(totalQuota, "sQuota"),
+      styledCell(totalDiff, totalDiff >= 0 ? "sDiffGood" : "sDiffBad")
+    ],
+    ...records.map((row) => [
+      styledCell(row.day.slice(5), "sDate"),
+      styledCell(row.weighted, "sTotal"),
+      styledCell(row.quota, "sQuota"),
+      styledCell(row.diff, row.diff >= 0 ? "sDiffGood" : "sDiffBad")
+    ])
+  ];
+  return { rows, blockWidth: 4, totalWeighted, totalQuota, totalDiff };
+}
 function mixedExportColumnWidths(blockWidth, itemCount, memberCount) {
   const block = [
     46,
@@ -3990,10 +4113,47 @@ function mixedExportColumnWidths(blockWidth, itemCount, memberCount) {
     ...(index < memberCount - 1 ? [12] : [])
   ]).flat().slice(0, memberCount * blockWidth + Math.max(0, memberCount - 1));
 }
+function mixedExportColumns(blockWidth, itemCount, memberCount) {
+  return [
+    54,
+    64,
+    64,
+    64,
+    12,
+    ...mixedExportColumnWidths(blockWidth, itemCount, memberCount)
+  ];
+}
+function mixedExportSectionRows(period, periodIndex, members, group, itemNames, periods, report) {
+  const summaryBlock = mixedExportGroupBlock(period.days, members, itemNames, report);
+  const memberBlocks = members.map((member, index) => mixedExportBlock(member, index, group, period.days, itemNames, periods, report));
+  const blocks = [summaryBlock, ...memberBlocks];
+  const maxRows = Math.max(...blocks.map((block) => block.rows.length));
+  const spacer = styledCell("", "sSpacer");
+  const sectionWidth = summaryBlock.blockWidth + 1 + memberBlocks.reduce((sum, block) => sum + block.blockWidth, 0) + Math.max(0, memberBlocks.length - 1);
+  const title = `${period.label}｜${period.start} 至 ${period.end}｜全组完成 ${fmt(summaryBlock.totalWeighted)}｜定额 ${fmt(summaryBlock.totalQuota)}｜差额 ${fmt(summaryBlock.totalDiff)}`;
+  const collapsed = periodIndex > 0;
+  const rows = [
+    { cells: [styledCell(title, "sTitle", { mergeAcross: sectionWidth - 1 })], collapsed }
+  ];
+  for (let rowIndex = 0; rowIndex < maxRows; rowIndex += 1) {
+    const cells = [
+      ...(summaryBlock.rows[rowIndex] || Array.from({ length: summaryBlock.blockWidth }, () => styledCell("", "sItem"))),
+      spacer,
+      ...memberBlocks.flatMap((block, blockIndex) => [
+        ...(block.rows[rowIndex] || Array.from({ length: block.blockWidth }, () => styledCell("", "sItem"))),
+        ...(blockIndex < memberBlocks.length - 1 ? [spacer] : [])
+      ])
+    ];
+    rows.push(collapsed ? { cells, outlineLevel: 1, hidden: true } : cells);
+  }
+  return rows;
+}
 function buildMixedTableWorkbookXml() {
   const report = selectedReportData();
   return withReportData(report, () => {
-    const { start, end, days } = mixedTableExportRange();
+    const exportPeriods = mixedTableExportPeriods(report);
+    const start = exportPeriods[exportPeriods.length - 1]?.start || currentDate;
+    const end = exportPeriods[0]?.end || currentDate;
     const group = $("mixedTableGroup")?.value || mixedTableGroup || report.groups?.[0] || "";
     const members = membersForGroupValue(group, report);
     const itemNames = groupVisibleItems(group, report);
@@ -4009,14 +4169,12 @@ function buildMixedTableWorkbookXml() {
         xml: styledWorkbookXml([rowsToStyledWorksheet(`${group || "混合"}总表`, [[styledCell("暂无成员", "sTitle")]], [120])], mixedWorkbookStylesXml())
       };
     }
-    const blocks = members.map((member, index) => mixedExportBlock(member, index, group, days, itemNames, periods, report));
-    const maxRows = Math.max(...blocks.map((block) => block.rows.length));
-    const spacer = styledCell("", "sSpacer");
-    const rows = Array.from({ length: maxRows }, (_, rowIndex) => blocks.flatMap((block, blockIndex) => [
-      ...(block.rows[rowIndex] || Array.from({ length: block.blockWidth }, () => styledCell("", "sItem"))),
-      ...(blockIndex < blocks.length - 1 ? [spacer] : [])
-    ]));
-    const columns = mixedExportColumnWidths(blocks[0].blockWidth, itemNames.length, blocks.length);
+    const rows = exportPeriods.flatMap((period, index) => {
+      const sectionRows = mixedExportSectionRows(period, index, members, group, itemNames, periods, report);
+      return index < exportPeriods.length - 1 ? [...sectionRows, [styledCell("", "sSpacer", { mergeAcross: 3 })]] : sectionRows;
+    });
+    const blockWidth = mixedExportBlock(members[0], 0, group, exportPeriods[0].days, itemNames, periods, report).blockWidth;
+    const columns = mixedExportColumns(blockWidth, itemNames.length, members.length);
     const sheet = rowsToStyledWorksheet(`${group || "混合"}总表`, rows, columns);
     return { group, start, end, name: `${group || "混合"}总表`, rows, columns, xml: styledWorkbookXml([sheet], mixedWorkbookStylesXml()) };
   });
@@ -4236,9 +4394,16 @@ function bindEvents() {
     mixedTableMember = $("mixedTableMember").value;
     renderMixedOverviewTable();
   };
+  $("mixedTableRangeMode").onchange = () => {
+    mixedTableRangeMode = $("mixedTableRangeMode").value || "week";
+    mixedExportMonths = [];
+    applyMixedTableDefaultRange();
+    renderMixedOverviewTable();
+  };
   ["mixedTableStart", "mixedTableEnd"].forEach((id) => {
     $(id).onchange = () => {
-      mixedTableRangeMode = $("mixedTableStart").value || $("mixedTableEnd").value ? "custom" : "default";
+      mixedTableRangeMode = "custom";
+      if ($("mixedTableRangeMode")) $("mixedTableRangeMode").value = "custom";
       renderMixedOverviewTable();
     };
   });

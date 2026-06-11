@@ -251,10 +251,17 @@
             </div>
             <div class="analysis-controls">
               <select id="mixedTableGroup"></select>
+              <select id="mixedTableRangeMode" aria-label="混合表格范围">
+                <option value="week">本周</option>
+                <option value="small-month">小月度汇总</option>
+                <option value="month">月度汇总</option>
+                <option value="custom">自定义</option>
+              </select>
               <select class="hidden" id="mixedTableMember" aria-hidden="true" tabindex="-1"></select>
               <input id="mixedTableStart" type="date" aria-label="开始日期">
               <input id="mixedTableEnd" type="date" aria-label="结束日期">
             </div>
+            <div class="mixed-export-months" id="mixedExportMonths"></div>
             <div class="person-tabs mixed-tabs" id="mixedMemberTabs"></div>
             <div class="table-scroll mixed-table-wrap">
               <table class="mixed-table">
