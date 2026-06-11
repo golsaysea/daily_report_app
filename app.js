@@ -2522,6 +2522,50 @@ function renderDetailSummaryGrid(containerId, itemTotals, stats) {
   }).join("");
   box.innerHTML = statCards + (itemCards || `<div class="hint">这个范围还没有项目数据。</div>`);
 }
+function overviewGroupBriefLine(row, itemNames) {
+  const items = itemNames
+    .map((name) => [name, Number(row.items?.[name] || 0)])
+    .filter(([, amount]) => amount)
+    .map(([name, amount]) => `${name}${fmt(amount)}`)
+    .join(" ");
+  const note = String(row.note || "").trim();
+  const parts = [
+    `${row.member}${row.diff >= 0 ? "+" : ""}${fmt(row.diff)}`,
+    note,
+    items
+  ].filter(Boolean);
+  return parts.join(" ");
+}
+function buildOverviewGroupBrief(group, report = reportData()) {
+  const range = overviewRangeInfo();
+  const days = buildDateRange(range.start, range.end);
+  const itemNames = configuredItems();
+  const groupRows = membersForGroupValue(group, report).map((member) => aggregateMemberRange(member, days, report, itemNames));
+  const totalWeighted = groupRows.reduce((sum, row) => sum + row.weighted, 0);
+  const totalQuota = groupRows.reduce((sum, row) => sum + row.quota, 0);
+  const totalDiff = totalWeighted - totalQuota;
+  const behindRows = groupRows.filter((row) => row.diff < 0).sort((a, b) => a.diff - b.diff);
+  const reasonLines = behindRows.length
+    ? behindRows.map((row) => overviewGroupBriefLine(row, itemNames))
+    : ["全部成员达标，暂无未完成原因。"];
+  return [
+    `${group} ${range.label}报数`,
+    `时间：${rangeText(range)}`,
+    `定额：${fmt(totalQuota)}`,
+    `实际完成数：${fmt(totalWeighted)}`,
+    `差额：${totalDiff >= 0 ? "+" : ""}${fmt(totalDiff)}`,
+    "差额多的是谁，原因是什么：",
+    ...reasonLines
+  ].join("\n");
+}
+function exportOverviewGroupBrief(group) {
+  const report = selectedReportData();
+  const text = withReportData(report, () => buildOverviewGroupBrief(group, report));
+  const range = overviewRangeInfo();
+  const safeGroup = String(group || "group").replace(/[\\/:*?"<>|]/g, "_");
+  const blob = new Blob([`\ufeff${text}`], { type: "text/plain;charset=utf-8" });
+  downloadBlob(blob, `overview_${safeGroup}_${range.start}_${range.end}.txt`);
+}
 function selectOverviewMember(member, report = reportData()) {
   const group = report.memberGroups?.[member] || report.groups?.[0] || "__all__";
   overviewDetailGroup = group;
@@ -2596,6 +2640,7 @@ function renderOverview() {
         <summary>
           <span>${escapeHtml(group)} · ${groupRows.length} 人</span>
           <strong>${fmt(groupWeighted)} / ${fmt(groupQuota)}</strong>
+          <button class="overview-export-btn" type="button" data-overview-export-group="${escapeAttr(group)}">导出简报</button>
         </summary>
         <div class="member-grid">${groupRows.map(rowCard).join("") || `<div class="hint">这个分组还没有成员。</div>`}</div>
       </details>
@@ -2604,6 +2649,13 @@ function renderOverview() {
   $("overviewGrid").querySelectorAll("[data-overview-member]").forEach((card) => {
     card.onclick = () => {
       selectOverviewMember(card.dataset.overviewMember, report);
+    };
+  });
+  $("overviewGrid").querySelectorAll("[data-overview-export-group]").forEach((button) => {
+    button.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      exportOverviewGroupBrief(button.dataset.overviewExportGroup || "");
     };
   });
   const detailPick = renderGroupMemberSelectors("overviewDetailGroup", "overviewDetailMember", overviewDetailGroup, overviewDetailMember);
