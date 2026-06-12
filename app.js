@@ -3,6 +3,7 @@
   updated_at: "",
   quota: 3,
   rules: { "视频": 1, "音频": 1, "字幕": 0.25, "图片": 0 },
+  productRules: { "视频": { video: 1, ai: 0 }, "音频": { video: 0, ai: 0 }, "字幕": { video: 0, ai: 1 }, "图片": { video: 0, ai: 0 } },
   members: ["成员A"],
   groups: ["1组"],
   memberGroups: { "成员A": "1组" },
@@ -173,6 +174,23 @@ function normalizeCheckinOptions(options) {
   const source = Array.isArray(options) && options.length ? options : defaultData.checkinOptions;
   return Array.from(new Set(source.map(normalizeCheckinStatus).filter(Boolean)));
 }
+function defaultProductRuleFor(name) {
+  if (name === "字幕") return { video: 0, ai: 1 };
+  if (["图片", "音频", "动画"].includes(name)) return { video: 0, ai: 0 };
+  return { video: 1, ai: 0 };
+}
+function normalizeProductRules(rules = {}, productRules = {}) {
+  const normalized = {};
+  Object.keys(rules || {}).forEach((name) => {
+    const fallback = defaultProductRuleFor(name);
+    const source = productRules?.[name] || {};
+    normalized[name] = {
+      video: Number(source.video ?? fallback.video ?? 0),
+      ai: Number(source.ai ?? fallback.ai ?? 0)
+    };
+  });
+  return normalized;
+}
 function recordKeyParts(key = "") {
   const [date = "", ...memberParts] = String(key || "").split("|");
   return { date, member: memberParts.join("|") };
@@ -204,6 +222,7 @@ function normalize(source) {
     if (!memberGroups[name]) memberGroups[name] = groups[0];
   });
   const rules = loaded.rules && typeof loaded.rules === "object" ? loaded.rules : clone(defaultData.rules);
+  const productRules = normalizeProductRules(rules, loaded.productRules || defaultData.productRules);
   groups.forEach((group) => {
     if (!Array.isArray(groupItems[group])) groupItems[group] = Object.keys(rules);
   });
@@ -216,6 +235,7 @@ function normalize(source) {
     version: 2,
     quota: Number(loaded.quota ?? defaultData.quota),
     rules,
+    productRules,
     members,
     groups,
     memberGroups,
@@ -421,6 +441,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
   const recordKeys = new Set([...Object.keys(remote.records || {}), ...Object.keys(local.records || {})]);
   if (mode === "admin") {
     merged.rules = clone(local.rules);
+    merged.productRules = normalizeProductRules(local.rules, local.productRules || {});
     merged.members = clone(local.members);
     merged.groups = clone(local.groups || []);
     merged.memberGroups = clone(local.memberGroups || {});
@@ -438,6 +459,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.reviewMessages = clone(local.reviewMessages || defaultData.reviewMessages);
   } else {
     merged.rules = clone(remote.rules || local.rules);
+    merged.productRules = normalizeProductRules(merged.rules, remote.productRules || local.productRules || {});
     merged.members = clone(remote.members || local.members);
     merged.groups = clone(remote.groups || local.groups || ["1组"]);
     merged.memberGroups = clone(remote.memberGroups || local.memberGroups || {});
@@ -467,6 +489,7 @@ function mergeSummaryData(baseSource, sourceData) {
   const merged = normalize({
     ...base,
     rules: { ...base.rules, ...source.rules },
+    productRules: normalizeProductRules({ ...base.rules, ...source.rules }, { ...base.productRules, ...source.productRules }),
     members: Array.from(new Set([...base.members, ...source.members])),
     groups: Array.from(new Set([...base.groups, ...source.groups])),
     memberGroups: { ...base.memberGroups, ...source.memberGroups },
@@ -488,6 +511,7 @@ function mergeAdminCenterData(baseSource, sourceData) {
   const merged = normalize({
     ...base,
     rules: { ...source.rules, ...base.rules },
+    productRules: normalizeProductRules({ ...source.rules, ...base.rules }, { ...source.productRules, ...base.productRules }),
     members: Array.from(new Set([...base.members, ...source.members])),
     groups: Array.from(new Set([...base.groups, ...source.groups])),
     memberGroups: { ...source.memberGroups, ...base.memberGroups },
@@ -1826,6 +1850,15 @@ function totalsForItems(items = {}, itemNames = configuredItems(), report = repo
   }, 0);
   return { raw, weighted };
 }
+function productTotalsForItems(items = {}, itemNames = configuredItems(), report = reportData()) {
+  return itemNames.reduce((totals, name) => {
+    const amount = Number(items[name] || 0);
+    const rule = report.productRules?.[name] || defaultProductRuleFor(name);
+    totals.video += amount * Number(rule.video || 0);
+    totals.ai += amount * Number(rule.ai || 0);
+    return totals;
+  }, { video: 0, ai: 0 });
+}
 function memberVisibleItems(member = currentMember) {
   const group = data.memberGroups?.[member] || data.groups[0];
   const groupSelected = data.groupItems?.[group];
@@ -2038,7 +2071,7 @@ function renderEntryInputs(seedItems = readEntryInputs()) {
       <div class="entry-field">
         <label>${escapeHtml(name)}</label>
         <input type="number" step="0.01" inputmode="decimal" data-entry-item="${escapeAttr(name)}" value="${value || ""}" placeholder="0">
-        <small>换算系数 ${fmt(weight)}</small>
+        <small>工作量系数 ${fmt(weight)}</small>
       </div>
     `;
   }).join("");
@@ -2056,10 +2089,13 @@ function renderEntryInputs(seedItems = readEntryInputs()) {
 function preview() {
   const items = readEntryInputs();
   const parsed = { items, ...entryTotals(items) };
+  const products = productTotalsForItems(items, Object.keys(items), data);
   const quota = memberQuota(currentMember);
   const passed = parsed.weighted >= quota;
   $("rawTotal").textContent = fmt(parsed.raw);
   $("weightedTotal").textContent = fmt(parsed.weighted);
+  if ($("videoProductTotal")) $("videoProductTotal").textContent = fmt(products.video);
+  if ($("aiProductTotal")) $("aiProductTotal").textContent = fmt(products.ai);
   $("auditText").textContent = passed ? "达标 ✓" : "不达标";
   $("auditCard").className = `metric ${passed ? "pass" : "fail"}`;
   const manualStatus = $("statusSelect")?.value || "自动判断";
@@ -2069,8 +2105,9 @@ function preview() {
   if ($("dailyQuotaInput")) $("dailyQuotaInput").placeholder = fmt(memberQuota(currentMember, currentDate));
   $("previewBody").innerHTML = Object.entries(parsed.items).map(([name, amount]) => {
     const weight = Number(data.rules[name] ?? 1);
-    return `<tr><td>${escapeHtml(name)}</td><td>${fmt(amount)}</td><td>${fmt(weight)}</td><td>${fmt(amount * weight)}</td></tr>`;
-  }).join("") || `<tr><td colspan="4" class="hint">还没有可统计的报数。</td></tr>`;
+    const productRule = data.productRules?.[name] || defaultProductRuleFor(name);
+    return `<tr><td>${escapeHtml(name)}</td><td>${fmt(amount)}</td><td>${fmt(weight)}</td><td>${fmt(amount * weight)}</td><td>${fmt(amount * Number(productRule.video || 0))}</td><td>${fmt(amount * Number(productRule.ai || 0))}</td></tr>`;
+  }).join("") || `<tr><td colspan="6" class="hint">还没有可统计的报数。</td></tr>`;
 }
 function loadForm() {
   const rec = currentRecord();
@@ -2195,22 +2232,32 @@ function renderRules() {
   Object.entries(data.rules).forEach(([name, weight]) => {
     const row = document.createElement("div");
     row.className = "rule-row";
+    const productRule = data.productRules?.[name] || defaultProductRuleFor(name);
     row.innerHTML = `
       <input value="${escapeAttr(name)}" aria-label="项目">
-      <input type="number" step="0.01" value="${Number(weight)}" aria-label="换算系数">
+      <input type="number" step="0.01" value="${Number(weight)}" aria-label="工作量系数" title="工作量系数">
+      <input type="number" step="0.01" value="${Number(productRule.video || 0)}" aria-label="视频成品系数" title="视频成品系数">
+      <input type="number" step="0.01" value="${Number(productRule.ai || 0)}" aria-label="AI成品系数" title="AI成品系数">
       <button class="icon" title="删除">×</button>
     `;
     const inputs = row.querySelectorAll("input");
-    inputs[0].onchange = () => renameRule(name, inputs[0].value.trim(), Number(inputs[1].value));
-    inputs[1].oninput = () => {
+    inputs[0].onchange = () => renameRule(name, inputs[0].value.trim(), Number(inputs[1].value), Number(inputs[2].value), Number(inputs[3].value));
+    [inputs[1], inputs[2], inputs[3]].forEach((input) => {
+      input.oninput = () => {
       data.rules[name] = Number(inputs[1].value || 0);
+      data.productRules[name] = {
+        video: Number(inputs[2].value || 0),
+        ai: Number(inputs[3].value || 0)
+      };
       renderEntryInputs(readEntryInputs());
       preview();
       scheduleSave("admin");
-    };
+      };
+    });
     row.querySelector("button").onclick = () => {
       createBackup(`删除项目 ${name} 前备份`);
       delete data.rules[name];
+      delete data.productRules?.[name];
       Object.keys(data.groupItems || {}).forEach((group) => {
         data.groupItems[group] = (data.groupItems[group] || []).filter((item) => item !== name);
       });
@@ -2383,10 +2430,16 @@ function moveMember(name, direction) {
   render();
   scheduleSave("admin");
 }
-function renameRule(oldName, newName, weight) {
+function renameRule(oldName, newName, weight, videoProduct, aiProduct) {
   if (!newName) return renderRules();
+  const previousProduct = data.productRules?.[oldName] || defaultProductRuleFor(newName);
   delete data.rules[oldName];
+  delete data.productRules?.[oldName];
   data.rules[newName] = Number.isFinite(weight) ? weight : 1;
+  data.productRules[newName] = {
+    video: Number.isFinite(videoProduct) ? videoProduct : Number(previousProduct.video || 0),
+    ai: Number.isFinite(aiProduct) ? aiProduct : Number(previousProduct.ai || 0)
+  };
   Object.keys(data.memberItems || {}).forEach((member) => {
     data.memberItems[member] = (data.memberItems[member] || []).map((item) => item === oldName ? newName : item);
   });
@@ -2512,7 +2565,7 @@ function renderDetailSummaryGrid(containerId, itemTotals, stats) {
   const maxItem = Math.max(...itemEntries.map(([, amount]) => Math.abs(Number(amount || 0))), 1);
   const statCards = [
     { label: "原始合计", value: fmt(stats.raw || 0) },
-    { label: "换算合计", value: fmt(stats.weighted || 0), strong: true },
+    { label: "工作量合计", value: fmt(stats.weighted || 0), strong: true },
     { label: stats.quotaLabel || "周期定额", value: fmt(stats.quota || 0) },
     { label: "总差额", value: `${(stats.diff || 0) >= 0 ? "+" : ""}${fmt(stats.diff || 0)}`, tone: (stats.diff || 0) >= 0 ? "good" : "bad" }
   ].map((item) => `
@@ -2655,7 +2708,7 @@ function renderOverview() {
         <span class="status ${row.passed ? "pass" : "fail"}">${row.passed ? "达标" : "未达"}</span>
       </div>
       <div class="progress" title="${row.rate}%"><span style="--w:${row.rate}%"></span></div>
-      <div class="hint">换算 ${fmt(row.weighted)} / ${quotaLabel} ${fmt(row.quota)}</div>
+      <div class="hint">工作量 ${fmt(row.weighted)} / ${quotaLabel} ${fmt(row.quota)}</div>
       <div class="hint">差额 ${row.diff >= 0 ? "+" : ""}${fmt(row.diff)}</div>
       <div class="hint">打卡 ${row.checkinCount}/${row.checkinSlots}</div>
       <div class="hint">${escapeHtml(row.note || "暂无备注")}</div>
@@ -3171,7 +3224,7 @@ function renderPersonalTable(days, aggregate, scope, member) {
       <th>日期</th>
       <th>成员</th>
       ${itemNames.map((name) => `<th>${escapeHtml(name)}</th>`).join("")}
-      <th>换算</th>
+      <th>工作量</th>
       <th>定额</th>
       <th>差额</th>
     </tr>
@@ -3789,7 +3842,7 @@ function styledWorkbookXml(sheets, stylesXml) {
 function buildThreeMonthWorkbookXml() {
   const itemNames = configuredItems();
   const records = recordsInLastMonths(3);
-  const header = ["日期", "成员", "分组", ...itemNames, "原始", "换算", "定额", "差额", "状态", "备注"];
+  const header = ["日期", "成员", "分组", ...itemNames, "原始", "工作量", "定额", "差额", "状态", "备注"];
   const recordRow = (rec) => {
     const quota = memberQuota(rec.member, rec.date);
     return [
@@ -3805,7 +3858,7 @@ function buildThreeMonthWorkbookXml() {
       rec.reason || rec.harvest || rec.diary || ""
     ];
   };
-  const summaryRows = [["成员", "分组", "总换算", "总定额", "总差额", ...itemNames]];
+  const summaryRows = [["成员", "分组", "总工作量", "总定额", "总差额", ...itemNames]];
   data.members.forEach((member) => {
     const own = records.filter((rec) => rec.member === member);
     const weighted = own.reduce((sum, rec) => sum + Number(rec.weighted_total || 0), 0);
@@ -4099,7 +4152,7 @@ function mixedExportStatusStyle(status) {
   return "sItem";
 }
 function mixedExportBlock(member, index, group, days, itemNames, periods, report) {
-  const header = [`${index + 1} ${member}`, ...periods.map((period) => `${period.label}打卡`), ...itemNames, "原始", "换算", "定额", "差额", "状态", "备注"];
+  const header = [`${index + 1} ${member}`, ...periods.map((period) => `${period.label}打卡`), ...itemNames, "原始", "工作量", "定额", "差额", "状态", "备注"];
   const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
   const records = days.map((day) => {
     const rec = recordForReport(report, day, member);
@@ -4116,7 +4169,7 @@ function mixedExportBlock(member, index, group, days, itemNames, periods, report
   const totalQuota = records.reduce((sum, row) => sum + row.quota, 0);
   const totalDiff = totalWeighted - totalQuota;
   const blockWidth = header.length;
-  const title = `${index + 1} ${member}｜${group || "未分组"}｜换算 ${fmt(totalWeighted)}｜定额 ${fmt(totalQuota)}｜差额 ${fmt(totalDiff)}`;
+  const title = `${index + 1} ${member}｜${group || "未分组"}｜工作量 ${fmt(totalWeighted)}｜定额 ${fmt(totalQuota)}｜差额 ${fmt(totalDiff)}`;
   const rows = [
     [styledCell(title, "sTitle", { mergeAcross: blockWidth - 1 })],
     header.map((label) => styledCell(label, "sHeader")),
@@ -4268,7 +4321,7 @@ function exportMixedTableWorkbook() {
 }
 function buildCsvBackups() {
   const itemNames = configuredItems();
-  const rows = [["日期", "成员", ...itemNames, "原始", "换算", "定额", "差额", "状态", "备注"]];
+  const rows = [["日期", "成员", ...itemNames, "原始", "工作量", "定额", "差额", "状态", "备注"]];
   Object.values(data.records)
     .sort((a, b) => `${a.date}|${a.member}`.localeCompare(`${b.date}|${b.member}`))
     .forEach((rec) => {
@@ -4285,7 +4338,7 @@ function buildCsvBackups() {
         rec.reason || rec.harvest || rec.diary || ""
       ]);
     });
-  const summary = [["成员", "总换算", "总定额", "总差额", ...itemNames]];
+  const summary = [["成员", "总工作量", "总定额", "总差额", ...itemNames]];
   data.members.forEach((member) => {
     const records = Object.values(data.records).filter((rec) => rec.member === member);
     const weighted = records.reduce((sum, rec) => sum + Number(rec.weighted_total || 0), 0);
@@ -4512,6 +4565,7 @@ function bindEvents() {
   $("addRuleBtn").onclick = () => {
     const name = nextRuleName();
     data.rules[name] = 1;
+    data.productRules[name] = defaultProductRuleFor(name);
     Object.keys(data.groupItems || {}).forEach((group) => {
       if (!Array.isArray(data.groupItems[group])) data.groupItems[group] = [];
       data.groupItems[group].push(name);
