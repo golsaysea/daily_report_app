@@ -2228,7 +2228,15 @@ function memberTodayStatus(name) {
   return "待审";
 }
 function renderRules() {
-  $("rulesBox").innerHTML = "";
+  $("rulesBox").innerHTML = `
+    <div class="rule-row config-head">
+      <span>项目</span>
+      <span>工作量</span>
+      <span>视频成品</span>
+      <span>AI成品</span>
+      <span></span>
+    </div>
+  `;
   Object.entries(data.rules).forEach(([name, weight]) => {
     const row = document.createElement("div");
     row.className = "rule-row";
@@ -2273,7 +2281,14 @@ function renderRules() {
   });
 }
 function renderMemberQuotas() {
-  $("memberQuotaBox").innerHTML = "";
+  $("memberQuotaBox").innerHTML = `
+    <div class="quota-row config-head">
+      <span>成员</span>
+      <span>默认定额</span>
+      <span>当天定额</span>
+      <span></span>
+    </div>
+  `;
   const selectedDay = $("adminQuotaDate")?.value || currentDate;
   if ($("adminQuotaDate")) $("adminQuotaDate").value = selectedDay;
   if ($("dateQuotaInput")) {
