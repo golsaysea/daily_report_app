@@ -11,7 +11,7 @@
   memberItems: {},
   memberQuotas: {},
   dailyQuotas: {},
-  checkinOptions: ["上线", "请假", "迟到", "听交通", "聚会", "上班", "干农活", "值日", "熬夜", "拍摄"],
+  checkinOptions: ["准时上线", "迟到", "请假", "上班", "已讲", "准时下线", "伯日", "值日", "请假生病", "聚会", "运动", "其他本分", "上学", "听评", "熬夜", "拍摄"],
   timezones: [
     { name: "澳大利亚时间", offset: "+10:00" },
     { name: "新西兰时间", offset: "+12:00" },
@@ -166,7 +166,6 @@ function todayLocalKey() {
 }
 function normalizeCheckinStatus(status) {
   const text = String(status || "").trim();
-  if (text === "准时上线") return "上线";
   if (text === "迟到") return "迟到";
   return text;
 }
@@ -228,7 +227,7 @@ function normalize(source) {
   });
   const memberQuotas = { ...(loaded.memberQuotas || {}) };
   const dailyQuotas = loaded.dailyQuotas && typeof loaded.dailyQuotas === "object" ? clone(loaded.dailyQuotas) : {};
-  const checkinOptions = normalizeCheckinOptions(loaded.checkinOptions);
+  const checkinOptions = normalizeCheckinOptions([...(Array.isArray(loaded.checkinOptions) ? loaded.checkinOptions : []), ...defaultData.checkinOptions]);
   return {
     ...clone(defaultData),
     ...loaded,
@@ -1932,10 +1931,11 @@ function sanitizeCheckins(checkins = {}) {
   const cleaned = {};
   const allowed = new Set(checkinPeriods().map((period) => period.key));
   Object.entries(checkins || {}).forEach(([key, value]) => {
-    if (!allowed.has(key) || !value) return;
+    const normalizedKey = key === "afternoon" ? "noon" : key;
+    if (!allowed.has(normalizedKey) || !value) return;
     const status = normalizeCheckinStatus(checkinStatus(value));
     if (!status) return;
-    cleaned[key] = typeof value === "object"
+    cleaned[normalizedKey] = typeof value === "object"
       ? { ...value, status }
       : { status };
   });

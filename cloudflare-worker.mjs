@@ -66,8 +66,10 @@ function hasValidToken(request, env, bodyPassword = "") {
 
 function sanitizeCheckins(checkins = {}) {
   const result = {};
-  ["morning", "afternoon", "evening"].forEach((slot) => {
-    const source = checkins?.[slot] || {};
+  ["morning", "noon", "evening"].forEach((slot) => {
+    const source = checkins?.[slot] || (slot === "noon" ? checkins?.afternoon : null) || {};
+    const status = String(source.status || "").trim();
+    if (!status) return;
     result[slot] = {
       status: String(source.status || "").trim(),
       time: source.time ? String(source.time) : "",
@@ -150,9 +152,9 @@ function newerText(a = "", b = "", prefer = "first") {
 
 function mergeCheckins(remote = {}, local = {}) {
   const merged = {};
-  ["morning", "afternoon", "evening"].forEach((slot) => {
-    const a = remote?.[slot] || {};
-    const b = local?.[slot] || {};
+  ["morning", "noon", "evening"].forEach((slot) => {
+    const a = remote?.[slot] || (slot === "noon" ? remote?.afternoon : null) || {};
+    const b = local?.[slot] || (slot === "noon" ? local?.afternoon : null) || {};
     merged[slot] = newerRecordSide(a, b, "second");
   });
   return sanitizeCheckins(merged);
