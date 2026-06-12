@@ -4152,7 +4152,7 @@ function mixedExportStatusStyle(status) {
   return "sItem";
 }
 function mixedExportBlock(member, index, group, days, itemNames, periods, report) {
-  const header = ["成员", "日期", ...periods.map((period) => `${period.label}打卡`), ...itemNames, "原始", "工作量", "定额", "差额", "状态", "备注"];
+  const header = [`${index + 1} ${member}`, ...periods.map((period) => `${period.label}打卡`), ...itemNames, "原始", "工作量", "定额", "差额", "状态", "备注"];
   const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
   const records = days.map((day) => {
     const rec = recordForReport(report, day, member);
@@ -4174,7 +4174,6 @@ function mixedExportBlock(member, index, group, days, itemNames, periods, report
     [styledCell(title, "sTitle", { mergeAcross: blockWidth - 1 })],
     header.map((label) => styledCell(label, "sHeader")),
     [
-      styledCell(member, "sDate"),
       styledCell("合计", "sDate"),
       ...periods.map(() => styledCell("", "sCheckinBlank")),
       ...itemNames.map((name) => styledCell(itemTotals[name] || "", "sItem")),
@@ -4186,7 +4185,6 @@ function mixedExportBlock(member, index, group, days, itemNames, periods, report
       styledCell("", "sNote")
     ],
     ...records.map(({ day, rec, items, raw, weighted, quota, diff }) => [
-      styledCell(member, "sDate"),
       styledCell(day.slice(5), "sDate"),
       ...periods.map((period) => styledCell(checkinDisplay(rec?.checkins?.[period.key]), mixedExportCheckinStyle(rec?.checkins?.[period.key]))),
       ...itemNames.map((name) => styledCell(Number(items[name] || 0) || "", "sItem")),
@@ -4235,7 +4233,6 @@ function mixedExportGroupBlock(days, members, itemNames, report) {
 }
 function mixedExportColumnWidths(blockWidth, itemCount, memberCount) {
   const block = [
-    72,
     46,
     ...checkinPeriods().map(() => 46),
     ...Array.from({ length: itemCount }, () => 56),
