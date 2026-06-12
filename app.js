@@ -4044,7 +4044,12 @@ function xlsxCellXml(cell, rowIndex, colIndex) {
   }
   return `<c r="${ref}" s="${style}" t="inlineStr"><is><t>${xmlEscape(value)}</t></is></c>`;
 }
-function rowsToXlsxWorksheet(rows, columns = []) {
+function xlsxValidationXml(validation) {
+  const values = (validation.values || []).map((value) => String(value || "").replace(/"/g, '""')).filter(Boolean);
+  if (!values.length || !validation.sqref) return "";
+  return `<dataValidation type="list" allowBlank="1" showErrorMessage="1" sqref="${xmlEscape(validation.sqref)}"><formula1>"${xmlEscape(values.join(","))}"</formula1></dataValidation>`;
+}
+function rowsToXlsxWorksheet(rows, columns = [], options = {}) {
   const merges = [];
   const rowXml = rows.map((rowSpec, rowIndex) => {
     const row = Array.isArray(rowSpec) ? rowSpec : (rowSpec.cells || []);
@@ -4071,12 +4076,15 @@ function rowsToXlsxWorksheet(rows, columns = []) {
     ? `<cols>${columns.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${Math.max(6, Number(width || 48) / 7)}" customWidth="1"/>`).join("")}</cols>`
     : "";
   const mergeXml = merges.length ? `<mergeCells count="${merges.length}">${merges.map((ref) => `<mergeCell ref="${ref}"/>`).join("")}</mergeCells>` : "";
+  const validations = Array.isArray(options.validations) ? options.validations.map(xlsxValidationXml).filter(Boolean) : [];
+  const validationXml = validations.length ? `<dataValidations count="${validations.length}">${validations.join("")}</dataValidations>` : "";
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetPr><outlinePr summaryBelow="0" summaryRight="0"/></sheetPr>
   ${cols}
   <sheetData>${rowXml}</sheetData>
   ${mergeXml}
+  ${validationXml}
 </worksheet>`;
 }
 function xlsxStylesXml() {
@@ -4106,7 +4114,7 @@ function xlsxStylesXml() {
     ${xf(7)}
     ${xf(8)}
     ${xf(9)}
-    ${xf(10, 0, "left", true)}
+    ${xf(10, 0, "left", false)}
     ${xf(11, 2, "center", true)}
     ${xf(12, 1, "center", true)}
     ${xf(13, 2, "center", true)}
@@ -4118,14 +4126,14 @@ function xlsxStylesXml() {
   </cellXfs>
 </styleSheet>`;
 }
-function buildXlsxWorkbook(sheetName, rows, columns = []) {
+function buildXlsxWorkbook(sheetName, rows, columns = [], options = {}) {
   return createZip([
     { name: "[Content_Types].xml", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>` },
     { name: "_rels/.rels", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
     { name: "xl/workbook.xml", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEscape(sheetNameSafe(sheetName))}" sheetId="1" r:id="rId1"/></sheets></workbook>` },
     { name: "xl/_rels/workbook.xml.rels", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
     { name: "xl/styles.xml", content: xlsxStylesXml() },
-    { name: "xl/worksheets/sheet1.xml", content: rowsToXlsxWorksheet(rows, columns) }
+    { name: "xl/worksheets/sheet1.xml", content: rowsToXlsxWorksheet(rows, columns, options) }
   ]);
 }
 function downloadBlob(blob, filename) {
@@ -4249,14 +4257,14 @@ function mixedExportGroupBlock(days, members, itemNames, report) {
 function mixedExportColumnWidths(blockWidth, itemCount, memberCount) {
   const block = [
     46,
-    ...checkinPeriods().map(() => 46),
-    ...Array.from({ length: itemCount }, () => 56),
-    56,
-    56,
-    56,
-    56,
+    ...checkinPeriods().map(() => 52),
+    ...Array.from({ length: itemCount }, () => 60),
     62,
-    126
+    62,
+    62,
+    62,
+    58,
+    76
   ];
   return Array.from({ length: memberCount }, (_, index) => [
     ...block,
@@ -4298,6 +4306,27 @@ function mixedExportSectionRows(period, periodIndex, members, group, itemNames, 
   }
   return rows;
 }
+function mixedExportCheckinValidations(exportPeriods, members, blockWidth, periods, report) {
+  const values = normalizeCheckinOptions(report.checkinOptions || defaultData.checkinOptions);
+  const validations = [];
+  let rowOffset = 0;
+  exportPeriods.forEach((period, periodIndex) => {
+    const recordStartRow = rowOffset + 5;
+    const recordEndRow = recordStartRow + period.days.length - 1;
+    if (recordEndRow >= recordStartRow) {
+      members.forEach((_, memberIndex) => {
+        const blockStartCol = 6 + memberIndex * (blockWidth + 1);
+        periods.forEach((__, periodIndex) => {
+          const col = columnName(blockStartCol + 1 + periodIndex);
+          validations.push({ sqref: `${col}${recordStartRow}:${col}${recordEndRow}`, values });
+        });
+      });
+    }
+    const sectionRows = 1 + Math.max(4 + period.days.length, 4);
+    rowOffset += sectionRows + (periodIndex < exportPeriods.length - 1 ? 1 : 0);
+  });
+  return validations;
+}
 function buildMixedTableWorkbookXml() {
   const report = selectedReportData();
   return withReportData(report, () => {
@@ -4325,14 +4354,15 @@ function buildMixedTableWorkbookXml() {
     });
     const blockWidth = mixedExportBlock(members[0], 0, group, exportPeriods[0].days, itemNames, periods, report).blockWidth;
     const columns = mixedExportColumns(blockWidth, itemNames.length, members.length);
+    const validations = mixedExportCheckinValidations(exportPeriods, members, blockWidth, periods, report);
     const sheet = rowsToStyledWorksheet(`${group || "混合"}总表`, rows, columns);
-    return { group, start, end, name: `${group || "混合"}总表`, rows, columns, xml: styledWorkbookXml([sheet], mixedWorkbookStylesXml()) };
+    return { group, start, end, name: `${group || "混合"}总表`, rows, columns, validations, xml: styledWorkbookXml([sheet], mixedWorkbookStylesXml()) };
   });
 }
 function exportMixedTableWorkbook() {
   saveFormSilently();
-  const { group, start, end, name, rows, columns } = buildMixedTableWorkbookXml();
-  downloadBlob(buildXlsxWorkbook(name, rows, columns), `mixed_table_${group || "all"}_${start}_${end}.xlsx`);
+  const { group, start, end, name, rows, columns, validations } = buildMixedTableWorkbookXml();
+  downloadBlob(buildXlsxWorkbook(name, rows, columns, { validations }), `mixed_table_${group || "all"}_${start}_${end}.xlsx`);
 }
 function buildCsvBackups() {
   const itemNames = configuredItems();
