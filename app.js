@@ -2615,6 +2615,38 @@ function overviewGroupBriefLine(row, itemNames) {
   ].filter(Boolean);
   return parts.join(" ");
 }
+function overviewGroupBriefReasonText(row, itemNames) {
+  const items = itemNames
+    .map((name) => [name, Number(row.items?.[name] || 0)])
+    .filter(([, amount]) => amount)
+    .map(([name, amount]) => `${name}${fmt(amount)}`)
+    .join(" ");
+  const note = String(row.note || "").trim();
+  const detail = [`差额 ${row.diff >= 0 ? "+" : ""}${fmt(row.diff)}`, note, items].filter(Boolean).join(" ");
+  return `${row.member}：\n   ${detail || "暂无原因"}`;
+}
+function buildOverviewGroupBriefText(group, report = reportData()) {
+  const range = overviewRangeInfo();
+  const days = buildDateRange(range.start, range.end);
+  const itemNames = configuredItems();
+  const groupRows = membersForGroupValue(group, report).map((member) => aggregateMemberRange(member, days, report, itemNames));
+  const totalWeighted = groupRows.reduce((sum, row) => sum + row.weighted, 0);
+  const totalQuota = groupRows.reduce((sum, row) => sum + row.quota, 0);
+  const totalDiff = totalWeighted - totalQuota;
+  const behindRows = groupRows.filter((row) => row.diff < 0).sort((a, b) => a.diff - b.diff);
+  const reasonLines = behindRows.length
+    ? behindRows.map((row) => overviewGroupBriefReasonText(row, itemNames))
+    : ["全部成员达标，暂无未完成原因。"];
+  return [
+    `${group} ${range.label}报数`,
+    `时间：${rangeText(range)}`,
+    `定额：${fmt(totalQuota)}`,
+    `实际完成数：${fmt(totalWeighted)}`,
+    `差额：${totalDiff >= 0 ? "+" : ""}${fmt(totalDiff)}`,
+    "差额多的是谁，原因是什么：",
+    ...reasonLines
+  ].join("\n");
+}
 function overviewGroupBriefRows(group, report = reportData()) {
   const range = overviewRangeInfo();
   const days = buildDateRange(range.start, range.end);
@@ -2656,6 +2688,13 @@ function exportOverviewGroupBrief(group) {
   const range = overviewRangeInfo();
   const safeGroup = String(group || "group").replace(/[\\/:*?"<>|]/g, "_");
   downloadBlob(buildXlsxWorkbook(`${safeGroup}简报`, workbook.rows, workbook.columns), `overview_${safeGroup}_${range.start}_${range.end}.xlsx`);
+}
+function exportOverviewGroupBriefText(group) {
+  const report = selectedReportData();
+  const text = withReportData(report, () => buildOverviewGroupBriefText(group, report));
+  const range = overviewRangeInfo();
+  const safeGroup = String(group || "group").replace(/[\\/:*?"<>|]/g, "_");
+  downloadBlob(new Blob([`\ufeff${text}`], { type: "text/plain;charset=utf-8" }), `overview_${safeGroup}_${range.start}_${range.end}.txt`);
 }
 function exportSelectedOverviewBriefs() {
   const report = selectedReportData();
@@ -2738,7 +2777,8 @@ function renderOverview() {
         <summary>
           <span>${escapeHtml(group)} · ${groupRows.length} 人</span>
           <strong>${fmt(groupWeighted)} / ${fmt(groupQuota)}</strong>
-          <button class="overview-export-btn" type="button" data-overview-export-group="${escapeAttr(group)}">导出简报</button>
+          <button class="overview-export-btn" type="button" data-overview-export-group="${escapeAttr(group)}">导出表格</button>
+          <button class="overview-export-btn" type="button" data-overview-export-text-group="${escapeAttr(group)}">导出TXT</button>
         </summary>
         <div class="member-grid">${groupRows.map(rowCard).join("") || `<div class="hint">这个分组还没有成员。</div>`}</div>
       </details>
@@ -2754,6 +2794,13 @@ function renderOverview() {
       event.preventDefault();
       event.stopPropagation();
       exportOverviewGroupBrief(button.dataset.overviewExportGroup || "");
+    };
+  });
+  $("overviewGrid").querySelectorAll("[data-overview-export-text-group]").forEach((button) => {
+    button.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      exportOverviewGroupBriefText(button.dataset.overviewExportTextGroup || "");
     };
   });
   const detailPick = renderGroupMemberSelectors("overviewDetailGroup", "overviewDetailMember", overviewDetailGroup, overviewDetailMember);
