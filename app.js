@@ -2795,9 +2795,11 @@ function renderOverview() {
         <summary>
           <span>${escapeHtml(group)} · ${groupRows.length} 人</span>
           <strong>${fmt(groupWeighted)} / ${fmt(groupQuota)}</strong>
-          <button class="overview-export-btn" type="button" data-overview-export-group="${escapeAttr(group)}">导出表格</button>
-          <button class="overview-export-btn" type="button" data-overview-export-text-group="${escapeAttr(group)}">导出TXT</button>
-          <button class="overview-export-btn" type="button" data-overview-copy-text-group="${escapeAttr(group)}">复制TXT</button>
+          <span class="overview-export-actions">
+            <button class="overview-export-btn" type="button" data-overview-export-group="${escapeAttr(group)}">表格</button>
+            <button class="overview-export-btn" type="button" data-overview-export-text-group="${escapeAttr(group)}">TXT</button>
+            <button class="overview-export-btn" type="button" data-overview-copy-text-group="${escapeAttr(group)}">复制</button>
+          </span>
         </summary>
         <div class="member-grid">${groupRows.map(rowCard).join("") || `<div class="hint">这个分组还没有成员。</div>`}</div>
       </details>
