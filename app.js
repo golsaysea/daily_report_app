@@ -2625,8 +2625,7 @@ function overviewGroupBriefReasonText(row, itemNames) {
   const detail = [`差额 ${row.diff >= 0 ? "+" : ""}${fmt(row.diff)}`, note, items].filter(Boolean).join(" ");
   return `${row.member}：\n   ${detail || "暂无原因"}`;
 }
-function buildOverviewGroupBriefText(group, report = reportData()) {
-  const range = overviewRangeInfo();
+function buildOverviewGroupBriefTextForRange(group, range, label, report = reportData()) {
   const days = buildDateRange(range.start, range.end);
   const itemNames = configuredItems();
   const groupRows = membersForGroupValue(group, report).map((member) => aggregateMemberRange(member, days, report, itemNames));
@@ -2638,7 +2637,7 @@ function buildOverviewGroupBriefText(group, report = reportData()) {
     ? behindRows.map((row) => overviewGroupBriefReasonText(row, itemNames))
     : ["全部成员达标，暂无未完成原因。"];
   return [
-    `${group} ${range.label}报数`,
+    `${group} ${label}报数`,
     `时间：${rangeText(range)}`,
     `定额：${fmt(totalQuota)}`,
     `实际完成数：${fmt(totalWeighted)}`,
@@ -2646,6 +2645,15 @@ function buildOverviewGroupBriefText(group, report = reportData()) {
     "差额多的是谁，原因是什么：",
     ...reasonLines
   ].join("\n");
+}
+function buildOverviewGroupBriefText(group, report = reportData()) {
+  const range = overviewRangeInfo();
+  if (overviewRangeMode === "week") {
+    return buildDateRange(range.start, range.end)
+      .map((day) => buildOverviewGroupBriefTextForRange(group, { start: day, end: day }, "今日", report))
+      .join("\n\n");
+  }
+  return buildOverviewGroupBriefTextForRange(group, range, range.label, report);
 }
 function overviewGroupBriefRows(group, report = reportData()) {
   const range = overviewRangeInfo();
@@ -2695,6 +2703,16 @@ function exportOverviewGroupBriefText(group) {
   const range = overviewRangeInfo();
   const safeGroup = String(group || "group").replace(/[\\/:*?"<>|]/g, "_");
   downloadBlob(new Blob([`\ufeff${text}`], { type: "text/plain;charset=utf-8" }), `overview_${safeGroup}_${range.start}_${range.end}.txt`);
+}
+async function copyOverviewGroupBriefText(group) {
+  const report = selectedReportData();
+  const text = withReportData(report, () => buildOverviewGroupBriefText(group, report));
+  try {
+    await navigator.clipboard.writeText(text);
+    showDialog("已复制TXT", "简报内容已经复制到剪贴板。", "");
+  } catch {
+    showDialog("复制失败", "浏览器没有允许写入剪贴板，可以先用“导出TXT”下载。", "");
+  }
 }
 function exportSelectedOverviewBriefs() {
   const report = selectedReportData();
@@ -2779,6 +2797,7 @@ function renderOverview() {
           <strong>${fmt(groupWeighted)} / ${fmt(groupQuota)}</strong>
           <button class="overview-export-btn" type="button" data-overview-export-group="${escapeAttr(group)}">导出表格</button>
           <button class="overview-export-btn" type="button" data-overview-export-text-group="${escapeAttr(group)}">导出TXT</button>
+          <button class="overview-export-btn" type="button" data-overview-copy-text-group="${escapeAttr(group)}">复制TXT</button>
         </summary>
         <div class="member-grid">${groupRows.map(rowCard).join("") || `<div class="hint">这个分组还没有成员。</div>`}</div>
       </details>
@@ -2801,6 +2820,13 @@ function renderOverview() {
       event.preventDefault();
       event.stopPropagation();
       exportOverviewGroupBriefText(button.dataset.overviewExportTextGroup || "");
+    };
+  });
+  $("overviewGrid").querySelectorAll("[data-overview-copy-text-group]").forEach((button) => {
+    button.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      copyOverviewGroupBriefText(button.dataset.overviewCopyTextGroup || "");
     };
   });
   const detailPick = renderGroupMemberSelectors("overviewDetailGroup", "overviewDetailMember", overviewDetailGroup, overviewDetailMember);
