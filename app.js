@@ -4235,6 +4235,54 @@ function mixedTableExportPeriods(report) {
   const range = mixedTableExportRange();
   return [{ label: mixedRangeInfo().label, month: monthKeyFromDateKey(range.end), ...range }];
 }
+function buildMixedSummaryText() {
+  const report = selectedReportData();
+  return withReportData(report, () => {
+    const { start, end, days } = mixedTableExportRange();
+    const group = $("mixedTableGroup")?.value || mixedTableGroup || report.groups?.[0] || "";
+    const members = membersForGroupValue(group, report);
+    const member = members.includes(mixedTableMember) ? mixedTableMember : members[0] || "";
+    if (!member) return "";
+    const itemNames = groupVisibleItems(group, report);
+    const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
+    let totalWeighted = 0;
+    let totalQuota = 0;
+    days.forEach((day) => {
+      const rec = recordForReport(report, day, member);
+      const items = rec?.items || {};
+      const totals = totalsForItems(items, itemNames, report);
+      totalWeighted += totals.weighted;
+      totalQuota += memberQuota(member, day);
+      itemNames.forEach((name) => {
+        itemTotals[name] += Number(items[name] || 0);
+      });
+    });
+    const diff = totalWeighted - totalQuota;
+    const detail = Object.entries(itemTotals)
+      .filter(([, amount]) => Number(amount || 0) !== 0)
+      .map(([name, amount]) => `${name}：${fmt(amount)}`)
+      .join("，") || "暂无项目明细";
+    return [
+      `${group} · ${member}`,
+      `时间：${start} 至 ${end}`,
+      `完成：${fmt(totalWeighted)}`,
+      `定额：${fmt(totalQuota)}`,
+      `差额：${diff >= 0 ? "+" : ""}${fmt(diff)}`,
+      `状态：${diff >= 0 ? "已达标" : "未达标"}`,
+      `项目明细：${detail}`
+    ].join("\n");
+  });
+}
+async function copyMixedSummaryText() {
+  const text = buildMixedSummaryText();
+  if (!text) return showDialog("暂无可复制内容", "请先选择小组和成员。", "");
+  try {
+    await navigator.clipboard.writeText(text);
+    showDialog("已复制总数", "当前混合表格的总数和项目明细已复制到剪贴板。", "");
+  } catch {
+    showDialog("复制失败", "浏览器没有允许写入剪贴板，请手动查看或导出表格。", "");
+  }
+}
 function mixedExportCheckinStyle(value) {
   const status = checkinStatus(value);
   if (!status) return "sCheckinBlank";
@@ -4768,6 +4816,7 @@ function bindEvents() {
   $("cloudHistoryRefreshBtn").onclick = () => refreshCloudHistory(false);
   $("cloudHistoryRestoreBtn").onclick = () => restoreCloudHistory().catch((err) => alert(`恢复云端历史失败：${err.message}`));
   $("exportBtn").onclick = exportData;
+  $("copyMixedSummaryBtn").onclick = copyMixedSummaryText;
   $("exportMixedTableBtn").onclick = exportMixedTableWorkbook;
   $("backupBtn").onclick = () => setView("admin");
   $("sheetBackupBtn").onclick = backupSheets;
