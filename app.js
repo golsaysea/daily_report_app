@@ -1585,16 +1585,16 @@ function dateKeyForMonthDay(monthKey, day) {
   const safeDay = Math.min(Math.max(1, Number(day) || 1), daysInMonth(monthKey));
   return `${monthKey}-${String(safeDay).padStart(2, "0")}`;
 }
-function cutoffPeriodRange(dayKey, cutoffDay) {
+function cutoffPeriodRange(dayKey, endDay, startDay = endDay + 1) {
   const monthKey = monthKeyFromDateKey(dayKey);
   const day = Number(String(dayKey || "").slice(8, 10)) || 1;
-  const endMonth = day <= cutoffDay ? monthKey : shiftMonthKey(monthKey, 1);
-  return cutoffPeriodRangeForMonth(endMonth, cutoffDay);
+  const endMonth = day <= endDay ? monthKey : shiftMonthKey(monthKey, 1);
+  return cutoffPeriodRangeForMonth(endMonth, startDay, endDay);
 }
-function cutoffPeriodRangeForMonth(endMonth, cutoffDay) {
+function cutoffPeriodRangeForMonth(endMonth, startDay, endDay) {
   return {
-    start: dateKeyForMonthDay(shiftMonthKey(endMonth, -1), cutoffDay),
-    end: dateKeyForMonthDay(endMonth, cutoffDay)
+    start: dateKeyForMonthDay(shiftMonthKey(endMonth, -1), startDay),
+    end: dateKeyForMonthDay(endMonth, endDay)
   };
 }
 function cutoffEndMonthFor(dayKey, cutoffDay) {
@@ -1603,15 +1603,16 @@ function cutoffEndMonthFor(dayKey, cutoffDay) {
   return day <= cutoffDay ? monthKey : shiftMonthKey(monthKey, 1);
 }
 function mixedRangeInfo(dayKey = currentDate) {
-  if (mixedTableRangeMode === "small-month") return { label: "小月度汇总", cutoffDay: 14, endMonth: cutoffEndMonthFor(dayKey, 14), ...cutoffPeriodRange(dayKey, 14) };
-  if (mixedTableRangeMode === "month") return { label: "月度汇总", cutoffDay: 23, endMonth: cutoffEndMonthFor(dayKey, 23), ...cutoffPeriodRange(dayKey, 23) };
+  const monthKey = monthKeyFromDateKey(dayKey);
+  if (mixedTableRangeMode === "small-month") return { label: "小月度汇总", endMonth: monthKey, ...mixedPeriodRangeForMonth(monthKey, "small-month") };
+  if (mixedTableRangeMode === "month") return { label: "月度汇总", endMonth: monthKey, ...mixedPeriodRangeForMonth(monthKey, "month") };
   if (mixedTableRangeMode === "custom") return { label: "自定义", start: $("mixedTableStart")?.value || dayKey, end: $("mixedTableEnd")?.value || dayKey };
   return { label: "本周", ...weekRangeFor(dayKey) };
 }
 function overviewRangeInfo() {
   if (overviewRangeMode === "day") return { label: "今日", start: currentDate, end: currentDate };
   if (overviewRangeMode === "small-month") return { label: "小月度汇总", ...cutoffPeriodRange(currentDate, 14) };
-  if (overviewRangeMode === "month") return { label: "月度汇总", ...cutoffPeriodRange(currentDate, 23) };
+  if (overviewRangeMode === "month") return { label: "月度汇总", ...cutoffPeriodRange(currentDate, 22, 23) };
   return { label: "本周", ...weekRangeFor(currentDate) };
 }
 function rangeText(range) {
@@ -1637,12 +1638,12 @@ function mixedExportYearMonths(year = mixedExportYear) {
 }
 function periodMonthForDay(dayKey, mode = mixedTableRangeMode) {
   if (mode === "small-month") return cutoffEndMonthFor(dayKey, 14);
-  if (mode === "month") return cutoffEndMonthFor(dayKey, 23);
+  if (mode === "month") return cutoffEndMonthFor(dayKey, 22);
   return monthKeyFromDateKey(dayKey);
 }
 function mixedPeriodRangeForMonth(monthKey, mode = mixedTableRangeMode) {
-  if (mode === "small-month") return { label: `${mixedExportMonthLabel(monthKey)}小月度汇总`, ...cutoffPeriodRangeForMonth(monthKey, 14) };
-  if (mode === "month") return { label: `${mixedExportMonthLabel(monthKey)}月度汇总`, ...cutoffPeriodRangeForMonth(monthKey, 23) };
+  if (mode === "small-month") return { label: `${mixedExportMonthLabel(monthKey)}小月度汇总`, ...cutoffPeriodRangeForMonth(monthKey, 15, 14) };
+  if (mode === "month") return { label: `${mixedExportMonthLabel(monthKey)}月度汇总`, ...cutoffPeriodRangeForMonth(monthKey, 23, 22) };
   return { label: `${mixedExportMonthLabel(monthKey)}自然月`, start: `${monthKey}-01`, end: dateKeyForMonthDay(monthKey, daysInMonth(monthKey)) };
 }
 function availableMixedExportMonths(report, mode = mixedTableRangeMode) {
@@ -1651,10 +1652,20 @@ function availableMixedExportMonths(report, mode = mixedTableRangeMode) {
 function selectedMixedExportMonths(report) {
   if (mixedTableRangeMode !== "small-month" && mixedTableRangeMode !== "month") return [];
   const available = availableMixedExportMonths(report, mixedTableRangeMode);
-  if (!mixedExportMonths.length) mixedExportMonths = [periodMonthForDay(currentDate, mixedTableRangeMode)];
+  if (!mixedExportMonths.length) mixedExportMonths = [monthKeyFromDateKey(currentDate)];
   const selected = mixedExportMonths.filter((month) => available.includes(month));
   if (selected.length) return selected.sort().reverse();
-  return [available[0] || periodMonthForDay(currentDate, mixedTableRangeMode)].filter(Boolean);
+  return [available.includes(monthKeyFromDateKey(currentDate)) ? monthKeyFromDateKey(currentDate) : available[0]].filter(Boolean);
+}
+function syncMixedDateInputsToSelectedMonths(report) {
+  if (mixedTableRangeMode !== "small-month" && mixedTableRangeMode !== "month") return;
+  const months = selectedMixedExportMonths(report);
+  const ranges = months.map((month) => mixedPeriodRangeForMonth(month, mixedTableRangeMode));
+  if (!ranges.length) return;
+  const start = ranges[ranges.length - 1].start;
+  const end = ranges[0].end;
+  if ($("mixedTableStart")) $("mixedTableStart").value = start;
+  if ($("mixedTableEnd")) $("mixedTableEnd").value = end;
 }
 function renderMixedExportMonths(report) {
   const box = $("mixedExportMonths");
@@ -1681,11 +1692,15 @@ function renderMixedExportMonths(report) {
   $("mixedExportYearInput").onchange = () => {
     mixedExportYear = Number($("mixedExportYearInput").value || mixedExportYear);
     mixedExportMonths = [`${mixedExportYear}-${String(Number(monthKeyFromDateKey(currentDate).slice(5, 7)) || 1).padStart(2, "0")}`];
+    syncMixedDateInputsToSelectedMonths(report);
     renderMixedExportMonths(report);
+    renderMixedOverviewTable();
   };
   box.querySelectorAll("input[type='checkbox']").forEach((input) => {
     input.onchange = () => {
       mixedExportMonths = Array.from(box.querySelectorAll("input[type='checkbox']:checked")).map((item) => item.value).sort().reverse();
+      syncMixedDateInputsToSelectedMonths(report);
+      renderMixedOverviewTable();
     };
   });
 }
