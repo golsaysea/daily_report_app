@@ -4238,7 +4238,10 @@ function mixedTableExportPeriods(report) {
 function buildMixedSummaryText() {
   const report = selectedReportData();
   return withReportData(report, () => {
-    const { start, end, days } = mixedTableExportRange();
+    const periods = mixedTableExportPeriods(report);
+    const start = periods[periods.length - 1]?.start || currentDate;
+    const end = periods[0]?.end || currentDate;
+    const days = periods.flatMap((period) => period.days || []);
     const group = $("mixedTableGroup")?.value || mixedTableGroup || report.groups?.[0] || "";
     const members = membersForGroupValue(group, report);
     const member = members.includes(mixedTableMember) ? mixedTableMember : members[0] || "";
@@ -4273,13 +4276,55 @@ function buildMixedSummaryText() {
     ].join("\n");
   });
 }
-async function copyMixedSummaryText() {
+function legacyCopyText(text) {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  }
+  textarea.remove();
+  return ok;
+}
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through to the textarea fallback for browsers with stricter permissions.
+    }
+  }
+  return legacyCopyText(text);
+}
+async function copyMixedSummaryText(event) {
   const text = buildMixedSummaryText();
   if (!text) return showDialog("暂无可复制内容", "请先选择小组和成员。", "");
-  try {
-    await navigator.clipboard.writeText(text);
+  const button = event?.currentTarget || $("copyMixedSummaryBtn");
+  const originalText = button?.textContent || "";
+  if (button) {
+    button.textContent = "复制中...";
+    button.disabled = true;
+  }
+  const ok = await copyTextToClipboard(text);
+  if (button) {
+    button.textContent = ok ? "已复制" : originalText;
+    setTimeout(() => {
+      button.textContent = originalText;
+      button.disabled = false;
+    }, 1200);
+  }
+  if (ok) {
     showDialog("已复制总数", "当前混合表格的总数和项目明细已复制到剪贴板。", "");
-  } catch {
+  } else {
     showDialog("复制失败", "浏览器没有允许写入剪贴板，请手动查看或导出表格。", "");
   }
 }
