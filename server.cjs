@@ -21,6 +21,7 @@ const defaultData = {
   memberItems: {},
   memberQuotas: {},
   dailyQuotas: {},
+  monthlyPlans: {},
   checkinOptions: ["\u4e0a\u7ebf", "\u8bf7\u5047", "\u71ac\u591c\u8fdf\u5230"],
   adminPassword: "",
   sheetBackupEnabled: true,
@@ -75,6 +76,7 @@ function normalize(source) {
   data.memberItems = data.memberItems && typeof data.memberItems === "object" ? data.memberItems : {};
   data.memberQuotas = data.memberQuotas && typeof data.memberQuotas === "object" ? data.memberQuotas : {};
   data.dailyQuotas = data.dailyQuotas && typeof data.dailyQuotas === "object" ? data.dailyQuotas : {};
+  data.monthlyPlans = data.monthlyPlans && typeof data.monthlyPlans === "object" ? data.monthlyPlans : {};
   data.checkinOptions = Array.isArray(data.checkinOptions) && data.checkinOptions.length
     ? Array.from(new Set(data.checkinOptions.map(normalizeCheckinStatus).filter(Boolean)))
     : clone(defaultData.checkinOptions);

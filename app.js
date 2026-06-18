@@ -11,6 +11,7 @@
   memberItems: {},
   memberQuotas: {},
   dailyQuotas: {},
+  monthlyPlans: {},
   checkinOptions: ["准时上线", "迟到", "请假", "上班", "已讲", "准时下线", "伯日", "值日", "请假生病", "聚会", "运动", "其他本分", "上学", "听评", "熬夜", "拍摄"],
   timezones: [
     { name: "澳大利亚时间", offset: "+10:00" },
@@ -190,6 +191,36 @@ function normalizeProductRules(rules = {}, productRules = {}) {
   });
   return normalized;
 }
+function normalizeMonthlyPlans(plans = {}) {
+  const normalized = {};
+  Object.entries(plans || {}).forEach(([periodKey, entry]) => {
+    if (!periodKey || !entry || typeof entry !== "object") return;
+    const members = {};
+    Object.entries(entry.members || {}).forEach(([member, plan]) => {
+      if (!member || !plan || typeof plan !== "object") return;
+      const items = {};
+      Object.entries(plan.items || {}).forEach(([name, amount]) => {
+        const value = Number(amount || 0);
+        if (value) items[name] = value;
+      });
+      members[member] = {
+        quota: plan.quota === "" || plan.quota === undefined || plan.quota === null ? "" : Number(plan.quota || 0),
+        items
+      };
+    });
+    normalized[periodKey] = { members };
+  });
+  return normalized;
+}
+function mergeMonthlyPlans(basePlans = {}, sourcePlans = {}) {
+  const merged = normalizeMonthlyPlans(basePlans);
+  const source = normalizeMonthlyPlans(sourcePlans);
+  Object.entries(source).forEach(([periodKey, entry]) => {
+    if (!merged[periodKey]) merged[periodKey] = { members: {} };
+    merged[periodKey].members = { ...(merged[periodKey].members || {}), ...(entry.members || {}) };
+  });
+  return merged;
+}
 function recordKeyParts(key = "") {
   const [date = "", ...memberParts] = String(key || "").split("|");
   return { date, member: memberParts.join("|") };
@@ -227,6 +258,7 @@ function normalize(source) {
   });
   const memberQuotas = { ...(loaded.memberQuotas || {}) };
   const dailyQuotas = loaded.dailyQuotas && typeof loaded.dailyQuotas === "object" ? clone(loaded.dailyQuotas) : {};
+  const monthlyPlans = normalizeMonthlyPlans(loaded.monthlyPlans || {});
   const checkinOptions = normalizeCheckinOptions([...(Array.isArray(loaded.checkinOptions) ? loaded.checkinOptions : []), ...defaultData.checkinOptions]);
   return {
     ...clone(defaultData),
@@ -242,6 +274,7 @@ function normalize(source) {
     memberItems,
     memberQuotas,
     dailyQuotas,
+    monthlyPlans,
     checkinOptions,
     timezones: Array.isArray(loaded.timezones) && loaded.timezones.length
       ? loaded.timezones.map((item) => ({
@@ -448,6 +481,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.memberItems = clone(local.memberItems || {});
     merged.memberQuotas = clone(local.memberQuotas || {});
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
+    merged.monthlyPlans = mergeMonthlyPlans(remote.monthlyPlans, local.monthlyPlans);
     merged.checkinOptions = clone(local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(local.quota || 0);
     merged.adminPassword = String(local.adminPassword || "");
@@ -466,6 +500,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.memberItems = clone(remote.memberItems || local.memberItems || {});
     merged.memberQuotas = clone(remote.memberQuotas || local.memberQuotas || {});
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
+    merged.monthlyPlans = mergeMonthlyPlans(local.monthlyPlans, remote.monthlyPlans);
     merged.checkinOptions = clone(remote.checkinOptions || local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(remote.quota ?? local.quota ?? 0);
     merged.adminPassword = String(remote.adminPassword || local.adminPassword || "");
@@ -496,6 +531,7 @@ function mergeSummaryData(baseSource, sourceData) {
     memberItems: { ...base.memberItems, ...source.memberItems },
     memberQuotas: { ...base.memberQuotas, ...source.memberQuotas },
     dailyQuotas: mergeDailyQuotas(base.dailyQuotas, source.dailyQuotas, "records"),
+    monthlyPlans: mergeMonthlyPlans(base.monthlyPlans, source.monthlyPlans),
     checkinOptions: Array.from(new Set([...(base.checkinOptions || []), ...(source.checkinOptions || [])])),
     records: { ...base.records }
   });
@@ -518,6 +554,7 @@ function mergeAdminCenterData(baseSource, sourceData) {
     memberItems: { ...source.memberItems, ...base.memberItems },
     memberQuotas: { ...source.memberQuotas, ...base.memberQuotas },
     dailyQuotas: mergeDailyQuotas(source.dailyQuotas, base.dailyQuotas, "records"),
+    monthlyPlans: mergeMonthlyPlans(source.monthlyPlans, base.monthlyPlans),
     checkinOptions: Array.from(new Set([...(base.checkinOptions || []), ...(source.checkinOptions || [])])),
     records: { ...base.records }
   });
@@ -535,6 +572,7 @@ function makeEmptySummary(seed = data) {
   empty.memberItems = {};
   empty.memberQuotas = {};
   empty.dailyQuotas = {};
+  empty.monthlyPlans = {};
   empty.records = {};
   return empty;
 }
@@ -570,6 +608,12 @@ function scopedSourceData(sourceData, label, existingMembers = new Set()) {
     scoped.dailyQuotas[day] = { default: entry.default ?? "", members: {} };
     Object.entries(entry.members || {}).forEach(([member, quota]) => {
       if (memberMap[member]) scoped.dailyQuotas[day].members[memberMap[member]] = quota;
+    });
+  });
+  Object.entries(source.monthlyPlans || {}).forEach(([periodKey, entry]) => {
+    scoped.monthlyPlans[periodKey] = { members: {} };
+    Object.entries(entry.members || {}).forEach(([member, plan]) => {
+      if (memberMap[member]) scoped.monthlyPlans[periodKey].members[memberMap[member]] = clone(plan);
     });
   });
   Object.values(source.records || {}).forEach((record) => {
@@ -2504,6 +2548,12 @@ function renameMember(oldName, newName) {
       delete entry.members[oldName];
     }
   });
+  Object.values(data.monthlyPlans || {}).forEach((entry) => {
+    if (entry.members && entry.members[oldName] !== undefined) {
+      entry.members[newName] = entry.members[oldName];
+      delete entry.members[oldName];
+    }
+  });
   Object.entries(data.records).forEach(([key, record]) => {
     if (record.member !== oldName) return;
     const nextKey = `${record.date}|${newName}`;
@@ -2573,6 +2623,7 @@ function aggregateMemberRange(member, days, report, itemNames) {
   });
   const checkinSlots = days.length * checkinPeriods().length;
   const rate = quota > 0 ? Math.min(100, Math.round((weighted / quota) * 100)) : 100;
+  const products = productTotalsForItems(items, itemNames, report);
   return {
     member,
     records,
@@ -2581,12 +2632,135 @@ function aggregateMemberRange(member, days, report, itemNames) {
     weighted,
     quota,
     diff: weighted - quota,
+    video: products.video,
+    ai: products.ai,
     passed: weighted >= quota,
     rate,
     checkinCount,
     checkinSlots,
     note: latestRecordText(records)
   };
+}
+function mixedMonthlyReportMode() {
+  return mixedTableRangeMode === "month" ? "month" : "small-month";
+}
+function mixedMonthlyPlanKey(mode, monthKey) {
+  return `${mode}|${monthKey}`;
+}
+function mixedMonthlyReportInfo(report = reportData()) {
+  const mode = mixedMonthlyReportMode();
+  const selectedMonths = mixedTableRangeMode === mode ? selectedMixedExportMonths(report) : [];
+  const currentMonth = selectedMonths[0] || periodMonthForDay(currentDate, mode);
+  const previousMonth = shiftMonthKey(currentMonth, -1);
+  const nextMonth = shiftMonthKey(currentMonth, 1);
+  const current = mixedPeriodRangeForMonth(currentMonth, mode);
+  const previous = mixedPeriodRangeForMonth(previousMonth, mode);
+  const next = mixedPeriodRangeForMonth(nextMonth, mode);
+  return { mode, currentMonth, previousMonth, nextMonth, current, previous, next };
+}
+function mixedMonthlyPlanFor(report, mode, monthKey, member, itemNames) {
+  const plan = report.monthlyPlans?.[mixedMonthlyPlanKey(mode, monthKey)]?.members?.[member] || {};
+  return {
+    quota: plan.quota === "" || plan.quota === undefined || plan.quota === null ? "" : Number(plan.quota || 0),
+    items: Object.fromEntries(itemNames.map((name) => [name, Number(plan.items?.[name] || 0)]))
+  };
+}
+function ensureMixedMonthlyPlanMember(mode, monthKey, member) {
+  const key = mixedMonthlyPlanKey(mode, monthKey);
+  if (!data.monthlyPlans || typeof data.monthlyPlans !== "object") data.monthlyPlans = {};
+  if (!data.monthlyPlans[key]) data.monthlyPlans[key] = { members: {} };
+  if (!data.monthlyPlans[key].members) data.monthlyPlans[key].members = {};
+  if (!data.monthlyPlans[key].members[member]) data.monthlyPlans[key].members[member] = { quota: "", items: {} };
+  if (!data.monthlyPlans[key].members[member].items) data.monthlyPlans[key].members[member].items = {};
+  return data.monthlyPlans[key].members[member];
+}
+function aggregateRangeForMember(member, range, itemNames, report) {
+  return aggregateMemberRange(member, buildDateRange(range.start, range.end), report, itemNames);
+}
+function mixedMonthlyMemberRow(member, info, itemNames, report) {
+  const current = aggregateRangeForMember(member, info.current, itemNames, report);
+  const previous = aggregateRangeForMember(member, info.previous, itemNames, report);
+  const nextActual = aggregateRangeForMember(member, info.next, itemNames, report);
+  const plan = mixedMonthlyPlanFor(report, info.mode, info.nextMonth, member, itemNames);
+  const planTotals = totalsForItems(plan.items, itemNames, report);
+  const planProducts = productTotalsForItems(plan.items, itemNames, report);
+  const planQuotaValue = quotaValue(plan.quota);
+  const defaultPlanQuota = nextActual.quota;
+  const planQuota = planQuotaValue === null ? defaultPlanQuota : planQuotaValue;
+  const planDiff = nextActual.weighted - planQuota;
+  const planRate = planQuota > 0 ? Math.round(nextActual.weighted / planQuota * 100) : 0;
+  const deltaItems = Object.fromEntries(itemNames.map((name) => [name, Number(current.items?.[name] || 0) - Number(previous.items?.[name] || 0)]));
+  return {
+    member,
+    current,
+    previous,
+    delta: {
+      items: deltaItems,
+      weighted: current.weighted - previous.weighted,
+      video: current.video - previous.video,
+      ai: current.ai - previous.ai
+    },
+    plan: {
+      rawQuota: plan.quota,
+      items: plan.items,
+      weighted: planTotals.weighted,
+      video: planProducts.video,
+      ai: planProducts.ai,
+      quota: planQuota,
+      defaultQuota: defaultPlanQuota,
+      actual: nextActual.weighted,
+      diff: planDiff,
+      rate: planRate
+    }
+  };
+}
+function sumMonthlyRows(rows, itemNames) {
+  const sumPart = (field) => {
+    const items = Object.fromEntries(itemNames.map((name) => [name, rows.reduce((sum, row) => sum + Number(row[field].items?.[name] || 0), 0)]));
+    return {
+      items,
+      weighted: rows.reduce((sum, row) => sum + Number(row[field].weighted || 0), 0),
+      quota: rows.reduce((sum, row) => sum + Number(row[field].quota || 0), 0),
+      diff: rows.reduce((sum, row) => sum + Number(row[field].diff || 0), 0),
+      video: rows.reduce((sum, row) => sum + Number(row[field].video || 0), 0),
+      ai: rows.reduce((sum, row) => sum + Number(row[field].ai || 0), 0)
+    };
+  };
+  const deltaItems = Object.fromEntries(itemNames.map((name) => [name, rows.reduce((sum, row) => sum + Number(row.delta.items?.[name] || 0), 0)]));
+  const planItems = Object.fromEntries(itemNames.map((name) => [name, rows.reduce((sum, row) => sum + Number(row.plan.items?.[name] || 0), 0)]));
+  const planQuota = rows.reduce((sum, row) => sum + Number(row.plan.quota || 0), 0);
+  const planActual = rows.reduce((sum, row) => sum + Number(row.plan.actual || 0), 0);
+  return {
+    member: "合计",
+    current: sumPart("current"),
+    previous: sumPart("previous"),
+    delta: {
+      items: deltaItems,
+      weighted: rows.reduce((sum, row) => sum + Number(row.delta.weighted || 0), 0),
+      video: rows.reduce((sum, row) => sum + Number(row.delta.video || 0), 0),
+      ai: rows.reduce((sum, row) => sum + Number(row.delta.ai || 0), 0)
+    },
+    plan: {
+      items: planItems,
+      weighted: rows.reduce((sum, row) => sum + Number(row.plan.weighted || 0), 0),
+      video: rows.reduce((sum, row) => sum + Number(row.plan.video || 0), 0),
+      ai: rows.reduce((sum, row) => sum + Number(row.plan.ai || 0), 0),
+      quota: planQuota,
+      defaultQuota: rows.reduce((sum, row) => sum + Number(row.plan.defaultQuota || 0), 0),
+      actual: planActual,
+      diff: planActual - planQuota,
+      rate: planQuota > 0 ? Math.round(planActual / planQuota * 100) : 0
+    }
+  };
+}
+function mixedMonthlyReportData(report = reportData()) {
+  return withReportData(report, () => {
+    const group = $("mixedTableGroup")?.value || mixedTableGroup || report.groups?.[0] || "";
+    const info = mixedMonthlyReportInfo(report);
+    const itemNames = groupVisibleItems(group, report);
+    const rows = membersForGroupValue(group, report).map((member) => mixedMonthlyMemberRow(member, info, itemNames, report));
+    return { group, info, itemNames, rows, total: sumMonthlyRows(rows, itemNames) };
+  });
 }
 function renderDetailSummaryGrid(containerId, itemTotals, stats) {
   const box = $(containerId);
@@ -2912,6 +3086,144 @@ function renderValueTabs(containerId, tabs, selectedValue, dataAttr) {
     ? tabs.map(({ value, label }) => `<button class="tab mini ${value === selectedValue ? "active" : ""}" type="button" ${dataAttr}="${escapeAttr(value)}">${escapeHtml(label)}</button>`).join("")
     : `<span class="hint">暂无成员</span>`;
 }
+function signedText(value) {
+  return `${Number(value || 0) >= 0 ? "+" : ""}${fmt(value)}`;
+}
+function mixedMonthlyReportLabels(itemNames) {
+  return {
+    actual: [...itemNames, "工作量", "视频成品", "AI成品", "定额", "差额"],
+    delta: [...itemNames, "工作量差", "视频差", "AI差"],
+    plan: [...itemNames, "计划工作量", "计划视频", "计划AI", "计划定额", "已完成", "进度", "计划差额"]
+  };
+}
+function mixedMonthlyActualCells(part, itemNames) {
+  return [
+    ...itemNames.map((name) => `<td>${fmt(part.items?.[name] || 0)}</td>`),
+    `<td class="mixed-total">${fmt(part.weighted || 0)}</td>`,
+    `<td>${fmt(part.video || 0)}</td>`,
+    `<td>${fmt(part.ai || 0)}</td>`,
+    `<td>${fmt(part.quota || 0)}</td>`,
+    `<td class="${(part.diff || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${signedText(part.diff || 0)}</td>`
+  ].join("");
+}
+function mixedMonthlyDeltaCells(delta, itemNames) {
+  return [
+    ...itemNames.map((name) => {
+      const value = Number(delta.items?.[name] || 0);
+      return `<td class="${value >= 0 ? "mixed-good-soft" : "mixed-bad"}">${signedText(value)}</td>`;
+    }),
+    `<td class="${(delta.weighted || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${signedText(delta.weighted || 0)}</td>`,
+    `<td class="${(delta.video || 0) >= 0 ? "mixed-good-soft" : "mixed-bad"}">${signedText(delta.video || 0)}</td>`,
+    `<td class="${(delta.ai || 0) >= 0 ? "mixed-good-soft" : "mixed-bad"}">${signedText(delta.ai || 0)}</td>`
+  ].join("");
+}
+function mixedMonthlyPlanCells(row, itemNames, info, editable, isTotal = false) {
+  const plan = row.plan || {};
+  const itemCells = itemNames.map((name) => {
+    const value = Number(plan.items?.[name] || 0);
+    if (isTotal) return `<td>${fmt(value)}</td>`;
+    return `<td class="mixed-plan-cell">
+      <input data-mixed-plan-item data-mode="${escapeAttr(info.mode)}" data-month="${escapeAttr(info.nextMonth)}" data-member="${escapeAttr(row.member)}" data-item="${escapeAttr(name)}" type="number" step="0.01" inputmode="decimal" value="${value || ""}" placeholder="0" ${editable ? "" : "disabled"}>
+    </td>`;
+  });
+  const quotaCell = isTotal
+    ? `<td>${fmt(plan.quota || 0)}</td>`
+    : `<td class="mixed-plan-cell">
+      <input data-mixed-plan-quota data-mode="${escapeAttr(info.mode)}" data-month="${escapeAttr(info.nextMonth)}" data-member="${escapeAttr(row.member)}" type="number" step="0.01" inputmode="decimal" value="${plan.rawQuota === "" || plan.rawQuota === undefined ? "" : Number(plan.rawQuota || 0)}" placeholder="${fmt(plan.defaultQuota || 0)}" ${editable ? "" : "disabled"}>
+    </td>`;
+  return [
+    ...itemCells,
+    `<td class="mixed-total">${fmt(plan.weighted || 0)}</td>`,
+    `<td>${fmt(plan.video || 0)}</td>`,
+    `<td>${fmt(plan.ai || 0)}</td>`,
+    quotaCell,
+    `<td>${fmt(plan.actual || 0)}</td>`,
+    `<td class="${(plan.diff || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${fmt(plan.rate || 0)}%</td>`,
+    `<td class="${(plan.diff || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${signedText(plan.diff || 0)}</td>`
+  ].join("");
+}
+function renderMixedMonthlyReport() {
+  if (!reportDataOverride) return withReportData(selectedReportData(), renderMixedMonthlyReport);
+  const head = $("mixedMonthlyReportHead");
+  const body = $("mixedMonthlyReportBody");
+  if (!head || !body) return;
+  const report = reportData();
+  const { group, info, itemNames, rows, total } = mixedMonthlyReportData(report);
+  const labels = mixedMonthlyReportLabels(itemNames);
+  const editable = report === data;
+  const planTitle = `${info.next.label.replace("汇总", "计划")} · ${rangeText(info.next)}`;
+  if ($("mixedMonthlyReportHint")) {
+    $("mixedMonthlyReportHint").textContent = `${group || "未分组"} · ${info.current.label} 对比 ${info.previous.label} · 计划期 ${rangeText(info.next)}`;
+  }
+  head.innerHTML = `
+    <tr class="mixed-group-head">
+      <th rowspan="2" class="mixed-sticky-name">姓名</th>
+      <th colspan="${labels.actual.length}">${escapeHtml(info.current.label)} · ${escapeHtml(rangeText(info.current))}</th>
+      <th colspan="${labels.actual.length}">${escapeHtml(info.previous.label)} · ${escapeHtml(rangeText(info.previous))}</th>
+      <th colspan="${labels.delta.length}">差额：当前 - 上期</th>
+      <th colspan="${labels.plan.length}">${escapeHtml(planTitle)}</th>
+    </tr>
+    <tr>
+      ${labels.actual.map((label) => `<th>${escapeHtml(label)}</th>`).join("")}
+      ${labels.actual.map((label) => `<th>${escapeHtml(label)}</th>`).join("")}
+      ${labels.delta.map((label) => `<th>${escapeHtml(label)}</th>`).join("")}
+      ${labels.plan.map((label) => `<th>${escapeHtml(label)}</th>`).join("")}
+    </tr>
+  `;
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="${1 + labels.actual.length * 2 + labels.delta.length + labels.plan.length}" class="hint">这个分组还没有成员。</td></tr>`;
+    return;
+  }
+  const renderRow = (row, isTotal = false) => `
+    <tr class="${isTotal ? "mixed-summary-row" : ""}">
+      <${isTotal ? "th" : "td"} class="mixed-member mixed-sticky-name">${escapeHtml(row.member)}</${isTotal ? "th" : "td"}>
+      ${mixedMonthlyActualCells(row.current, itemNames)}
+      ${mixedMonthlyActualCells(row.previous, itemNames)}
+      ${mixedMonthlyDeltaCells(row.delta, itemNames)}
+      ${mixedMonthlyPlanCells(row, itemNames, info, editable, isTotal)}
+    </tr>
+  `;
+  body.innerHTML = [renderRow(total, true), ...rows.map((row) => renderRow(row))].join("");
+  bindMixedMonthlyReportEdits();
+}
+function bindMixedMonthlyReportEdits() {
+  const body = $("mixedMonthlyReportBody");
+  if (!body) return;
+  body.querySelectorAll("[data-mixed-plan-item]").forEach((input) => {
+    input.onchange = () => updateMixedMonthlyPlanItem(input);
+    input.onkeydown = (event) => {
+      if (event.key === "Enter") input.blur();
+    };
+  });
+  body.querySelectorAll("[data-mixed-plan-quota]").forEach((input) => {
+    input.onchange = () => updateMixedMonthlyPlanQuota(input);
+    input.onkeydown = (event) => {
+      if (event.key === "Enter") input.blur();
+    };
+  });
+}
+function updateMixedMonthlyPlanItem(input) {
+  const member = input.dataset.member || "";
+  const item = input.dataset.item || "";
+  if (!member || !item || !data.members.includes(member)) return;
+  const plan = ensureMixedMonthlyPlanMember(input.dataset.mode || "small-month", input.dataset.month || monthKeyFromDateKey(currentDate), member);
+  const value = Number(input.value || 0);
+  if (!value) delete plan.items[item];
+  else plan.items[item] = value;
+  persistLocal();
+  scheduleSave("admin");
+  renderMixedMonthlyReport();
+}
+function updateMixedMonthlyPlanQuota(input) {
+  const member = input.dataset.member || "";
+  if (!member || !data.members.includes(member)) return;
+  const plan = ensureMixedMonthlyPlanMember(input.dataset.mode || "small-month", input.dataset.month || monthKeyFromDateKey(currentDate), member);
+  if (input.value === "") plan.quota = "";
+  else plan.quota = Number(input.value || 0);
+  persistLocal();
+  scheduleSave("admin");
+  renderMixedMonthlyReport();
+}
 function renderMixedOverviewTable() {
   if (!reportDataOverride) return withReportData(selectedReportData(), renderMixedOverviewTable);
   const report = reportData();
@@ -2962,6 +3274,7 @@ function renderMixedOverviewTable() {
   `;
   if (!member) {
     $("mixedTableBody").innerHTML = `<tr><td colspan="${5 + itemNames.length}" class="hint">暂无可查看成员。</td></tr>`;
+    renderMixedMonthlyReport();
     renderMixedCheckinTable();
     return;
   }
@@ -3008,6 +3321,7 @@ function renderMixedOverviewTable() {
   `);
   $("mixedTableBody").innerHTML = rows.join("");
   bindMixedTableEdits();
+  renderMixedMonthlyReport();
   renderMixedCheckinTable();
 }
 function bindMixedTableEdits() {
@@ -4369,6 +4683,76 @@ async function copyMixedSummaryText(event) {
     showDialog("复制失败", "浏览器没有允许写入剪贴板，请手动查看或导出表格。", "");
   }
 }
+function mixedMonthlyActualStyledCells(part, itemNames) {
+  return [
+    ...itemNames.map((name) => styledCell(part.items?.[name] || 0, "sItem")),
+    styledCell(part.weighted || 0, "sTotal"),
+    styledCell(part.video || 0, "sItem"),
+    styledCell(part.ai || 0, "sItem"),
+    styledCell(part.quota || 0, "sQuota"),
+    styledCell(part.diff || 0, (part.diff || 0) >= 0 ? "sDiffGood" : "sDiffBad")
+  ];
+}
+function mixedMonthlyDeltaStyledCells(delta, itemNames) {
+  return [
+    ...itemNames.map((name) => {
+      const value = Number(delta.items?.[name] || 0);
+      return styledCell(value, value >= 0 ? "sDiffGood" : "sDiffBad");
+    }),
+    styledCell(delta.weighted || 0, (delta.weighted || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
+    styledCell(delta.video || 0, (delta.video || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
+    styledCell(delta.ai || 0, (delta.ai || 0) >= 0 ? "sDiffGood" : "sDiffBad")
+  ];
+}
+function mixedMonthlyPlanStyledCells(plan, itemNames) {
+  return [
+    ...itemNames.map((name) => styledCell(plan.items?.[name] || 0, "sItem")),
+    styledCell(plan.weighted || 0, "sTotal"),
+    styledCell(plan.video || 0, "sItem"),
+    styledCell(plan.ai || 0, "sItem"),
+    styledCell(plan.quota || 0, "sQuota"),
+    styledCell(plan.actual || 0, "sTotal"),
+    styledCell(`${fmt(plan.rate || 0)}%`, (plan.diff || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
+    styledCell(plan.diff || 0, (plan.diff || 0) >= 0 ? "sDiffGood" : "sDiffBad")
+  ];
+}
+function mixedMonthlyReportColumns(itemCount) {
+  const actual = [...Array.from({ length: itemCount }, () => 60), 62, 64, 64, 62, 62];
+  const delta = [...Array.from({ length: itemCount }, () => 60), 66, 64, 64];
+  const plan = [...Array.from({ length: itemCount }, () => 60), 70, 64, 64, 70, 70, 58, 70];
+  return [72, ...actual, ...actual, ...delta, ...plan];
+}
+function mixedMonthlyReportExportBlock(group, report) {
+  const { info, itemNames, rows, total } = mixedMonthlyReportData(report);
+  const labels = mixedMonthlyReportLabels(itemNames);
+  const blockWidth = 1 + labels.actual.length * 2 + labels.delta.length + labels.plan.length;
+  const planTitle = `${info.next.label.replace("汇总", "计划")} · ${rangeText(info.next)}`;
+  const rowCells = (row) => [
+    styledCell(row.member, row.member === "合计" ? "sDate" : "sItem"),
+    ...mixedMonthlyActualStyledCells(row.current, itemNames),
+    ...mixedMonthlyActualStyledCells(row.previous, itemNames),
+    ...mixedMonthlyDeltaStyledCells(row.delta, itemNames),
+    ...mixedMonthlyPlanStyledCells(row.plan, itemNames)
+  ];
+  const exportRows = [
+    [styledCell(`人员月度总览｜${group || "未分组"}｜${info.current.label} 对比 ${info.previous.label}｜计划期 ${rangeText(info.next)}`, "sTitle", { mergeAcross: blockWidth - 1 })],
+    [
+      styledCell("姓名", "sHeader"),
+      styledCell(`${info.current.label} · ${rangeText(info.current)}`, "sHeader", { mergeAcross: labels.actual.length - 1 }),
+      styledCell(`${info.previous.label} · ${rangeText(info.previous)}`, "sHeader", { mergeAcross: labels.actual.length - 1 }),
+      styledCell("差额：当前 - 上期", "sHeader", { mergeAcross: labels.delta.length - 1 }),
+      styledCell(planTitle, "sHeader", { mergeAcross: labels.plan.length - 1 })
+    ],
+    ["姓名", ...labels.actual, ...labels.actual, ...labels.delta, ...labels.plan].map((label) => styledCell(label, "sHeader")),
+    rowCells(total),
+    ...rows.map((row) => rowCells(row))
+  ];
+  return { rows: exportRows, columns: mixedMonthlyReportColumns(itemNames.length), blockWidth };
+}
+function mergeColumnWidths(...widthSets) {
+  const maxLength = Math.max(...widthSets.map((set) => set.length), 0);
+  return Array.from({ length: maxLength }, (_, index) => Math.max(...widthSets.map((set) => Number(set[index] || 0)), 48));
+}
 function mixedExportCheckinStyle(value) {
   const status = checkinStatus(value);
   if (!status) return "sCheckinBlank";
@@ -4538,10 +4922,10 @@ function mixedExportSectionRows(period, periodIndex, members, group, itemNames, 
   }
   return rows;
 }
-function mixedExportCheckinValidations(exportPeriods, members, blockWidth, periods, report, summaryBlockWidth = 6) {
+function mixedExportCheckinValidations(exportPeriods, members, blockWidth, periods, report, summaryBlockWidth = 6, startRowOffset = 0) {
   const values = normalizeCheckinOptions(report.checkinOptions || defaultData.checkinOptions);
   const validations = [];
-  let rowOffset = 0;
+  let rowOffset = startRowOffset;
   exportPeriods.forEach((period, periodIndex) => {
     const recordStartRow = rowOffset + 5;
     const recordEndRow = recordStartRow + period.days.length - 1;
@@ -4580,13 +4964,16 @@ function buildMixedTableWorkbookXml() {
         xml: styledWorkbookXml([rowsToStyledWorksheet(`${group || "混合"}总表`, [[styledCell("暂无成员", "sTitle")]], [120])], mixedWorkbookStylesXml())
       };
     }
-    const rows = exportPeriods.flatMap((period, index) => {
+    const detailRows = exportPeriods.flatMap((period, index) => {
       const sectionRows = mixedExportSectionRows(period, index, members, group, itemNames, periods, report);
       return index < exportPeriods.length - 1 ? [...sectionRows, [styledCell("", "sSpacer", { mergeAcross: 3 })]] : sectionRows;
     });
     const blockWidth = mixedExportBlock(members[0], 0, group, exportPeriods[0].days, itemNames, periods, report).blockWidth;
-    const columns = mixedExportColumns(blockWidth, itemNames.length, members.length);
-    const validations = mixedExportCheckinValidations(exportPeriods, members, blockWidth, periods, report);
+    const monthlyBlock = mixedMonthlyReportExportBlock(group, report);
+    const monthlySpacer = [styledCell("", "sSpacer", { mergeAcross: Math.max(monthlyBlock.blockWidth, 1) - 1 })];
+    const rows = [...monthlyBlock.rows, monthlySpacer, ...detailRows];
+    const columns = mergeColumnWidths(mixedExportColumns(blockWidth, itemNames.length, members.length), monthlyBlock.columns);
+    const validations = mixedExportCheckinValidations(exportPeriods, members, blockWidth, periods, report, 6, monthlyBlock.rows.length + 1);
     const sheet = rowsToStyledWorksheet(`${group || "混合"}总表`, rows, columns);
     return { group, start, end, name: `${group || "混合"}总表`, rows, columns, validations, xml: styledWorkbookXml([sheet], mixedWorkbookStylesXml()) };
   });

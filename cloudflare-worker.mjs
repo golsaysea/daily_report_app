@@ -10,6 +10,7 @@ const defaultData = {
   memberItems: {},
   memberQuotas: {},
   dailyQuotas: {},
+  monthlyPlans: {},
   checkinOptions: ["上线", "请假", "熬夜迟到"],
   adminPassword: "",
   sheetBackupEnabled: true,
@@ -124,6 +125,7 @@ function normalize(loaded = {}) {
     memberItems: loaded.memberItems && typeof loaded.memberItems === "object" ? clone(loaded.memberItems) : {},
     memberQuotas: loaded.memberQuotas && typeof loaded.memberQuotas === "object" ? clone(loaded.memberQuotas) : {},
     dailyQuotas: loaded.dailyQuotas && typeof loaded.dailyQuotas === "object" ? clone(loaded.dailyQuotas) : {},
+    monthlyPlans: loaded.monthlyPlans && typeof loaded.monthlyPlans === "object" ? clone(loaded.monthlyPlans) : {},
     checkinOptions: Array.isArray(loaded.checkinOptions) && loaded.checkinOptions.length ? loaded.checkinOptions.map(String) : clone(defaultData.checkinOptions),
     adminPassword: String(loaded.adminPassword || ""),
     records: normalizeRecordMap(loaded.records || {}, rules)
@@ -196,6 +198,23 @@ function mergeDailyQuotas(remoteDaily = {}, localDaily = {}, mode = "records") {
   return merged;
 }
 
+function mergeMonthlyPlans(remotePlans = {}, localPlans = {}, mode = "records") {
+  const base = mode === "admin" ? remotePlans : localPlans;
+  const source = mode === "admin" ? localPlans : remotePlans;
+  const merged = clone(base || {});
+  Object.entries(source || {}).forEach(([periodKey, entry]) => {
+    merged[periodKey] = {
+      ...(merged[periodKey] || {}),
+      ...(entry || {}),
+      members: {
+        ...(merged[periodKey]?.members || {}),
+        ...(entry?.members || {})
+      }
+    };
+  });
+  return merged;
+}
+
 function clearActiveDeletedMembers(report) {
   const deleted = { ...(report.deletedMembers || {}) };
   (report.members || []).forEach((member) => {
@@ -219,6 +238,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.memberItems = clone(local.memberItems || {});
     merged.memberQuotas = clone(local.memberQuotas || {});
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
+    merged.monthlyPlans = mergeMonthlyPlans(remote.monthlyPlans, local.monthlyPlans, mode);
     merged.checkinOptions = clone(local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(local.quota || 0);
     merged.adminPassword = String(local.adminPassword || "");
@@ -232,6 +252,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.memberItems = clone(remote.memberItems || local.memberItems || {});
     merged.memberQuotas = clone(remote.memberQuotas || local.memberQuotas || {});
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
+    merged.monthlyPlans = mergeMonthlyPlans(remote.monthlyPlans, local.monthlyPlans, mode);
     merged.checkinOptions = clone(remote.checkinOptions || local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(remote.quota ?? local.quota ?? 0);
     merged.adminPassword = String(remote.adminPassword || local.adminPassword || "");
