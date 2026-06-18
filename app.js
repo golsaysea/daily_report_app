@@ -95,6 +95,22 @@ let cloudSyncEndpoint = loadCloudSyncEndpoint();
 let cloudSyncEndpointFromEnv = "";
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Number(n || 0).toLocaleString("zh-CN", { maximumFractionDigits: 3 });
+function cleanTotalValue(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return 0;
+  const snapped = Math.round(number * 4) / 4;
+  return Object.is(snapped, -0) ? 0 : snapped;
+}
+function fmtTotal(value) {
+  return fmt(cleanTotalValue(value));
+}
+function signedTotalText(value) {
+  const cleaned = cleanTotalValue(value);
+  return `${cleaned >= 0 ? "+" : ""}${fmt(cleaned)}`;
+}
+function styledTotalCell(value, style) {
+  return styledCell(cleanTotalValue(value), style);
+}
 const recordKey = () => `${currentDate}|${currentMember}`;
 const desktopApp = window.desktopApp || null;
 const syncPollMs = 3000;
@@ -1667,6 +1683,16 @@ function applyMixedTableDefaultRange() {
   const endInput = $("mixedTableEnd");
   if (!startInput || !endInput) return;
   if (mixedTableRangeMode === "custom" && startInput.value && endInput.value) return;
+  if (mixedTableRangeMode === "small-month" || mixedTableRangeMode === "month") {
+    const months = selectedMixedExportMonths(reportData());
+    const ranges = months.map((month) => mixedPeriodRangeForMonth(month, mixedTableRangeMode));
+    if (ranges.length) {
+      startInput.value = ranges[ranges.length - 1].start;
+      endInput.value = ranges[0].end;
+      if ($("mixedTableRangeMode")) $("mixedTableRangeMode").value = mixedTableRangeMode;
+      return;
+    }
+  }
   const range = mixedRangeInfo(currentDate);
   startInput.value = range.start;
   endInput.value = range.end;
@@ -3087,7 +3113,7 @@ function renderValueTabs(containerId, tabs, selectedValue, dataAttr) {
     : `<span class="hint">暂无成员</span>`;
 }
 function signedText(value) {
-  return `${Number(value || 0) >= 0 ? "+" : ""}${fmt(value)}`;
+  return signedTotalText(value);
 }
 function mixedMonthlyReportLabels(itemNames) {
   return {
@@ -3098,48 +3124,48 @@ function mixedMonthlyReportLabels(itemNames) {
 }
 function mixedMonthlyActualCells(part, itemNames) {
   return [
-    ...itemNames.map((name) => `<td>${fmt(part.items?.[name] || 0)}</td>`),
-    `<td class="mixed-total">${fmt(part.weighted || 0)}</td>`,
-    `<td>${fmt(part.video || 0)}</td>`,
-    `<td>${fmt(part.ai || 0)}</td>`,
-    `<td>${fmt(part.quota || 0)}</td>`,
-    `<td class="${(part.diff || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${signedText(part.diff || 0)}</td>`
+    ...itemNames.map((name) => `<td>${fmtTotal(part.items?.[name] || 0)}</td>`),
+    `<td class="mixed-total">${fmtTotal(part.weighted || 0)}</td>`,
+    `<td>${fmtTotal(part.video || 0)}</td>`,
+    `<td>${fmtTotal(part.ai || 0)}</td>`,
+    `<td>${fmtTotal(part.quota || 0)}</td>`,
+    `<td class="${cleanTotalValue(part.diff || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${signedText(part.diff || 0)}</td>`
   ].join("");
 }
 function mixedMonthlyDeltaCells(delta, itemNames) {
   return [
     ...itemNames.map((name) => {
-      const value = Number(delta.items?.[name] || 0);
+      const value = cleanTotalValue(delta.items?.[name] || 0);
       return `<td class="${value >= 0 ? "mixed-good-soft" : "mixed-bad"}">${signedText(value)}</td>`;
     }),
-    `<td class="${(delta.weighted || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${signedText(delta.weighted || 0)}</td>`,
-    `<td class="${(delta.video || 0) >= 0 ? "mixed-good-soft" : "mixed-bad"}">${signedText(delta.video || 0)}</td>`,
-    `<td class="${(delta.ai || 0) >= 0 ? "mixed-good-soft" : "mixed-bad"}">${signedText(delta.ai || 0)}</td>`
+    `<td class="${cleanTotalValue(delta.weighted || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${signedText(delta.weighted || 0)}</td>`,
+    `<td class="${cleanTotalValue(delta.video || 0) >= 0 ? "mixed-good-soft" : "mixed-bad"}">${signedText(delta.video || 0)}</td>`,
+    `<td class="${cleanTotalValue(delta.ai || 0) >= 0 ? "mixed-good-soft" : "mixed-bad"}">${signedText(delta.ai || 0)}</td>`
   ].join("");
 }
 function mixedMonthlyPlanCells(row, itemNames, info, editable, isTotal = false) {
   const plan = row.plan || {};
   const itemCells = itemNames.map((name) => {
     const value = Number(plan.items?.[name] || 0);
-    if (isTotal) return `<td>${fmt(value)}</td>`;
+    if (isTotal) return `<td>${fmtTotal(value)}</td>`;
     return `<td class="mixed-plan-cell">
       <input data-mixed-plan-item data-mode="${escapeAttr(info.mode)}" data-month="${escapeAttr(info.nextMonth)}" data-member="${escapeAttr(row.member)}" data-item="${escapeAttr(name)}" type="number" step="0.01" inputmode="decimal" value="${value || ""}" placeholder="0" ${editable ? "" : "disabled"}>
     </td>`;
   });
   const quotaCell = isTotal
-    ? `<td>${fmt(plan.quota || 0)}</td>`
+    ? `<td>${fmtTotal(plan.quota || 0)}</td>`
     : `<td class="mixed-plan-cell">
-      <input data-mixed-plan-quota data-mode="${escapeAttr(info.mode)}" data-month="${escapeAttr(info.nextMonth)}" data-member="${escapeAttr(row.member)}" type="number" step="0.01" inputmode="decimal" value="${plan.rawQuota === "" || plan.rawQuota === undefined ? "" : Number(plan.rawQuota || 0)}" placeholder="${fmt(plan.defaultQuota || 0)}" ${editable ? "" : "disabled"}>
+      <input data-mixed-plan-quota data-mode="${escapeAttr(info.mode)}" data-month="${escapeAttr(info.nextMonth)}" data-member="${escapeAttr(row.member)}" type="number" step="0.01" inputmode="decimal" value="${plan.rawQuota === "" || plan.rawQuota === undefined ? "" : Number(plan.rawQuota || 0)}" placeholder="${fmtTotal(plan.defaultQuota || 0)}" ${editable ? "" : "disabled"}>
     </td>`;
   return [
     ...itemCells,
-    `<td class="mixed-total">${fmt(plan.weighted || 0)}</td>`,
-    `<td>${fmt(plan.video || 0)}</td>`,
-    `<td>${fmt(plan.ai || 0)}</td>`,
+    `<td class="mixed-total">${fmtTotal(plan.weighted || 0)}</td>`,
+    `<td>${fmtTotal(plan.video || 0)}</td>`,
+    `<td>${fmtTotal(plan.ai || 0)}</td>`,
     quotaCell,
-    `<td>${fmt(plan.actual || 0)}</td>`,
-    `<td class="${(plan.diff || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${fmt(plan.rate || 0)}%</td>`,
-    `<td class="${(plan.diff || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${signedText(plan.diff || 0)}</td>`
+    `<td>${fmtTotal(plan.actual || 0)}</td>`,
+    `<td class="${cleanTotalValue(plan.diff || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${fmt(plan.rate || 0)}%</td>`,
+    `<td class="${cleanTotalValue(plan.diff || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${signedText(plan.diff || 0)}</td>`
   ].join("");
 }
 function renderMixedMonthlyReport() {
@@ -3299,9 +3325,9 @@ function renderMixedOverviewTable() {
             <input data-mixed-item data-day="${escapeAttr(day)}" data-member="${escapeAttr(member)}" data-item="${escapeAttr(name)}" type="number" step="0.01" inputmode="decimal" value="${amount || ""}" placeholder="0" ${editable ? "" : "disabled"}>
           </td>`;
         }).join("")}
-        <td class="mixed-total">${weighted ? fmt(weighted) : ""}</td>
-        <td>${fmt(quota)}</td>
-        <td class="${diff >= 0 ? "mixed-good" : "mixed-bad"}">${diff >= 0 ? "+" : ""}${fmt(diff)}</td>
+        <td class="mixed-total">${cleanTotalValue(weighted) ? fmtTotal(weighted) : ""}</td>
+        <td>${fmtTotal(quota)}</td>
+        <td class="${cleanTotalValue(diff) >= 0 ? "mixed-good" : "mixed-bad"}">${signedTotalText(diff)}</td>
         <td class="mixed-note">
           <textarea data-mixed-note data-day="${escapeAttr(day)}" data-member="${escapeAttr(member)}" rows="2" ${editable ? "" : "disabled"}>${escapeHtml(rec?.reason || rec?.harvest || rec?.diary || "")}</textarea>
         </td>
@@ -3312,10 +3338,10 @@ function renderMixedOverviewTable() {
   rows.unshift(`
     <tr class="mixed-summary-row">
       <th>合计</th>
-      ${itemNames.map((name) => `<th>${fmt(itemTotals[name])}</th>`).join("")}
-      <th>${fmt(totalWeighted)}</th>
-      <th>${fmt(totalQuota)}</th>
-      <th class="${totalDiff >= 0 ? "mixed-good" : "mixed-bad"}">${totalDiff >= 0 ? "+" : ""}${fmt(totalDiff)}</th>
+      ${itemNames.map((name) => `<th>${fmtTotal(itemTotals[name])}</th>`).join("")}
+      <th>${fmtTotal(totalWeighted)}</th>
+      <th>${fmtTotal(totalQuota)}</th>
+      <th class="${cleanTotalValue(totalDiff) >= 0 ? "mixed-good" : "mixed-bad"}">${signedTotalText(totalDiff)}</th>
       <th></th>
     </tr>
   `);
@@ -4615,18 +4641,18 @@ function buildMixedSummaryText() {
     });
     const diff = totalWeighted - totalQuota;
     const detail = Object.entries(itemTotals)
-      .filter(([, amount]) => Number(amount || 0) !== 0)
-      .map(([name, amount]) => `${name}：${fmt(amount)}`)
+      .filter(([, amount]) => cleanTotalValue(amount) !== 0)
+      .map(([name, amount]) => `${name}：${fmtTotal(amount)}`)
       .join("，") || "暂无项目明细";
     return [
       `${group} · ${member}`,
       `时间：${start} 至 ${end}`,
-      `完成：${fmt(totalWeighted)}`,
-      `定额：${fmt(totalQuota)}`,
-      `视频成品：${fmt(totalVideoProduct)}`,
-      `AI成品：${fmt(totalAiProduct)}`,
-      `差额：${diff >= 0 ? "+" : ""}${fmt(diff)}`,
-      `状态：${diff >= 0 ? "已达标" : "未达标"}`,
+      `完成：${fmtTotal(totalWeighted)}`,
+      `定额：${fmtTotal(totalQuota)}`,
+      `视频成品：${fmtTotal(totalVideoProduct)}`,
+      `AI成品：${fmtTotal(totalAiProduct)}`,
+      `差额：${signedTotalText(diff)}`,
+      `状态：${cleanTotalValue(diff) >= 0 ? "已达标" : "未达标"}`,
       `项目明细：${detail}`
     ].join("\n");
   });
@@ -4685,35 +4711,35 @@ async function copyMixedSummaryText(event) {
 }
 function mixedMonthlyActualStyledCells(part, itemNames) {
   return [
-    ...itemNames.map((name) => styledCell(part.items?.[name] || 0, "sItem")),
-    styledCell(part.weighted || 0, "sTotal"),
-    styledCell(part.video || 0, "sItem"),
-    styledCell(part.ai || 0, "sItem"),
-    styledCell(part.quota || 0, "sQuota"),
-    styledCell(part.diff || 0, (part.diff || 0) >= 0 ? "sDiffGood" : "sDiffBad")
+    ...itemNames.map((name) => styledTotalCell(part.items?.[name] || 0, "sItem")),
+    styledTotalCell(part.weighted || 0, "sTotal"),
+    styledTotalCell(part.video || 0, "sItem"),
+    styledTotalCell(part.ai || 0, "sItem"),
+    styledTotalCell(part.quota || 0, "sQuota"),
+    styledTotalCell(part.diff || 0, cleanTotalValue(part.diff || 0) >= 0 ? "sDiffGood" : "sDiffBad")
   ];
 }
 function mixedMonthlyDeltaStyledCells(delta, itemNames) {
   return [
     ...itemNames.map((name) => {
-      const value = Number(delta.items?.[name] || 0);
+      const value = cleanTotalValue(delta.items?.[name] || 0);
       return styledCell(value, value >= 0 ? "sDiffGood" : "sDiffBad");
     }),
-    styledCell(delta.weighted || 0, (delta.weighted || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
-    styledCell(delta.video || 0, (delta.video || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
-    styledCell(delta.ai || 0, (delta.ai || 0) >= 0 ? "sDiffGood" : "sDiffBad")
+    styledTotalCell(delta.weighted || 0, cleanTotalValue(delta.weighted || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
+    styledTotalCell(delta.video || 0, cleanTotalValue(delta.video || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
+    styledTotalCell(delta.ai || 0, cleanTotalValue(delta.ai || 0) >= 0 ? "sDiffGood" : "sDiffBad")
   ];
 }
 function mixedMonthlyPlanStyledCells(plan, itemNames) {
   return [
-    ...itemNames.map((name) => styledCell(plan.items?.[name] || 0, "sItem")),
-    styledCell(plan.weighted || 0, "sTotal"),
-    styledCell(plan.video || 0, "sItem"),
-    styledCell(plan.ai || 0, "sItem"),
-    styledCell(plan.quota || 0, "sQuota"),
-    styledCell(plan.actual || 0, "sTotal"),
-    styledCell(`${fmt(plan.rate || 0)}%`, (plan.diff || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
-    styledCell(plan.diff || 0, (plan.diff || 0) >= 0 ? "sDiffGood" : "sDiffBad")
+    ...itemNames.map((name) => styledTotalCell(plan.items?.[name] || 0, "sItem")),
+    styledTotalCell(plan.weighted || 0, "sTotal"),
+    styledTotalCell(plan.video || 0, "sItem"),
+    styledTotalCell(plan.ai || 0, "sItem"),
+    styledTotalCell(plan.quota || 0, "sQuota"),
+    styledTotalCell(plan.actual || 0, "sTotal"),
+    styledCell(`${fmt(plan.rate || 0)}%`, cleanTotalValue(plan.diff || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
+    styledTotalCell(plan.diff || 0, cleanTotalValue(plan.diff || 0) >= 0 ? "sDiffGood" : "sDiffBad")
   ];
 }
 function mixedMonthlyReportColumns(itemCount) {
@@ -4753,6 +4779,48 @@ function mergeColumnWidths(...widthSets) {
   const maxLength = Math.max(...widthSets.map((set) => set.length), 0);
   return Array.from({ length: maxLength }, (_, index) => Math.max(...widthSets.map((set) => Number(set[index] || 0)), 48));
 }
+function mixedExportTypeValue() {
+  const value = $("mixedExportType")?.value || "all";
+  return ["all", "monthly", "detail", "checkin"].includes(value) ? value : "all";
+}
+function mixedExportTypeLabel(type) {
+  return {
+    all: "全部表格",
+    monthly: "人员月度总览",
+    detail: "混合明细",
+    checkin: "小组打卡表"
+  }[type] || "全部表格";
+}
+function mixedCheckinExportGroup(report, fallbackGroup) {
+  const groups = report.groups || [];
+  if (groups.includes(mixedCheckinGroup)) return mixedCheckinGroup;
+  if (groups.includes(fallbackGroup)) return fallbackGroup;
+  return groups[0] || fallbackGroup || "";
+}
+function mixedCheckinExportBlock(exportPeriods, group, report) {
+  const members = membersForGroupValue(group, report);
+  const periods = checkinPeriods();
+  const blockWidth = 2 + periods.length;
+  const rows = [
+    [styledCell(`小组打卡表｜${group || "未分组"}`, "sTitle", { mergeAcross: blockWidth - 1 })]
+  ];
+  exportPeriods.forEach((period, index) => {
+    if (index > 0) rows.push([styledCell("", "sSpacer", { mergeAcross: blockWidth - 1 })]);
+    rows.push([styledCell(`${period.label}｜${period.start} 至 ${period.end}`, "sTitle", { mergeAcross: blockWidth - 1 })]);
+    rows.push(["日期", "成员", ...periods.map((item) => `${item.label}打卡`)].map((label) => styledCell(label, "sHeader")));
+    period.days.forEach((day) => {
+      members.forEach((member) => {
+        const rec = recordForReport(report, day, member);
+        rows.push([
+          styledCell(day.slice(5), "sDate"),
+          styledCell(member, "sItem"),
+          ...periods.map((item) => styledCell(checkinDisplay(rec?.checkins?.[item.key]), mixedExportCheckinStyle(rec?.checkins?.[item.key])))
+        ]);
+      });
+    });
+  });
+  return { rows, columns: [54, 90, ...periods.map(() => 74)], blockWidth };
+}
 function mixedExportCheckinStyle(value) {
   const status = checkinStatus(value);
   if (!status) return "sCheckinBlank";
@@ -4788,20 +4856,20 @@ function mixedExportBlock(member, index, group, days, itemNames, periods, report
   const totalVideo = records.reduce((sum, row) => sum + row.video, 0);
   const totalAi = records.reduce((sum, row) => sum + row.ai, 0);
   const blockWidth = header.length;
-  const title = `${index + 1} ${member}｜${group || "未分组"}｜工作量 ${fmt(totalWeighted)}｜视频成品 ${fmt(totalVideo)}｜AI成品 ${fmt(totalAi)}｜定额 ${fmt(totalQuota)}｜差额 ${fmt(totalDiff)}`;
+  const title = `${index + 1} ${member}｜${group || "未分组"}｜工作量 ${fmtTotal(totalWeighted)}｜视频成品 ${fmtTotal(totalVideo)}｜AI成品 ${fmtTotal(totalAi)}｜定额 ${fmtTotal(totalQuota)}｜差额 ${fmtTotal(totalDiff)}`;
   const rows = [
     [styledCell(title, "sTitle", { mergeAcross: blockWidth - 1 })],
     header.map((label) => styledCell(label, "sHeader")),
     [
       styledCell("合计", "sDate"),
       ...periods.map(() => styledCell("", "sCheckinBlank")),
-      ...itemNames.map((name) => styledCell(itemTotals[name] || "", "sItem")),
-      styledCell(totalRaw, "sTotal"),
-      styledCell(totalWeighted, "sTotal"),
-      styledCell(totalQuota, "sQuota"),
-      styledCell(totalDiff, totalDiff >= 0 ? "sDiffGood" : "sDiffBad"),
-      styledCell(totalVideo, "sTotal"),
-      styledCell(totalAi, "sTotal"),
+      ...itemNames.map((name) => styledTotalCell(itemTotals[name] || 0, "sItem")),
+      styledTotalCell(totalRaw, "sTotal"),
+      styledTotalCell(totalWeighted, "sTotal"),
+      styledTotalCell(totalQuota, "sQuota"),
+      styledTotalCell(totalDiff, cleanTotalValue(totalDiff) >= 0 ? "sDiffGood" : "sDiffBad"),
+      styledTotalCell(totalVideo, "sTotal"),
+      styledTotalCell(totalAi, "sTotal"),
       styledCell("", "sItem"),
       styledCell("", "sNote")
     ],
@@ -4809,12 +4877,12 @@ function mixedExportBlock(member, index, group, days, itemNames, periods, report
       styledCell(day.slice(5), "sDate"),
       ...periods.map((period) => styledCell(checkinDisplay(rec?.checkins?.[period.key]), mixedExportCheckinStyle(rec?.checkins?.[period.key]))),
       ...itemNames.map((name) => styledCell(Number(items[name] || 0) || "", "sItem")),
-      styledCell(raw, "sTotal"),
-      styledCell(weighted, "sTotal"),
-      styledCell(quota, "sQuota"),
-      styledCell(diff, diff >= 0 ? "sDiffGood" : "sDiffBad"),
-      styledCell(video, "sTotal"),
-      styledCell(ai, "sTotal"),
+      styledTotalCell(raw, "sTotal"),
+      styledTotalCell(weighted, "sTotal"),
+      styledTotalCell(quota, "sQuota"),
+      styledTotalCell(diff, cleanTotalValue(diff) >= 0 ? "sDiffGood" : "sDiffBad"),
+      styledTotalCell(video, "sTotal"),
+      styledTotalCell(ai, "sTotal"),
       styledCell(rec?.status || "", mixedExportStatusStyle(rec?.status || "")),
       styledCell(rec?.reason || rec?.harvest || rec?.diary || "", "sNote")
     ])
@@ -4849,19 +4917,19 @@ function mixedExportGroupBlock(days, members, itemNames, report) {
     ["日期", "全组完成", "全组定额", "全组差额", "视频成品", "AI成品"].map((label) => styledCell(label, "sHeader")),
     [
       styledCell("合计", "sDate"),
-      styledCell(totalWeighted, "sTotal"),
-      styledCell(totalQuota, "sQuota"),
-      styledCell(totalDiff, totalDiff >= 0 ? "sDiffGood" : "sDiffBad"),
-      styledCell(totalVideo, "sTotal"),
-      styledCell(totalAi, "sTotal")
+      styledTotalCell(totalWeighted, "sTotal"),
+      styledTotalCell(totalQuota, "sQuota"),
+      styledTotalCell(totalDiff, cleanTotalValue(totalDiff) >= 0 ? "sDiffGood" : "sDiffBad"),
+      styledTotalCell(totalVideo, "sTotal"),
+      styledTotalCell(totalAi, "sTotal")
     ],
     ...records.map((row) => [
       styledCell(row.day.slice(5), "sDate"),
-      styledCell(row.weighted, "sTotal"),
-      styledCell(row.quota, "sQuota"),
-      styledCell(row.diff, row.diff >= 0 ? "sDiffGood" : "sDiffBad"),
-      styledCell(row.video, "sTotal"),
-      styledCell(row.ai, "sTotal")
+      styledTotalCell(row.weighted, "sTotal"),
+      styledTotalCell(row.quota, "sQuota"),
+      styledTotalCell(row.diff, cleanTotalValue(row.diff) >= 0 ? "sDiffGood" : "sDiffBad"),
+      styledTotalCell(row.video, "sTotal"),
+      styledTotalCell(row.ai, "sTotal")
     ])
   ];
   return { rows, blockWidth: 6, totalWeighted, totalQuota, totalDiff, totalVideo, totalAi };
@@ -4904,7 +4972,7 @@ function mixedExportSectionRows(period, periodIndex, members, group, itemNames, 
   const maxRows = Math.max(...blocks.map((block) => block.rows.length));
   const spacer = styledCell("", "sSpacer");
   const sectionWidth = summaryBlock.blockWidth + 1 + memberBlocks.reduce((sum, block) => sum + block.blockWidth, 0) + Math.max(0, memberBlocks.length - 1);
-  const title = `${period.label}｜${period.start} 至 ${period.end}｜全组完成 ${fmt(summaryBlock.totalWeighted)}｜视频成品 ${fmt(summaryBlock.totalVideo)}｜AI成品 ${fmt(summaryBlock.totalAi)}｜定额 ${fmt(summaryBlock.totalQuota)}｜差额 ${fmt(summaryBlock.totalDiff)}`;
+  const title = `${period.label}｜${period.start} 至 ${period.end}｜全组完成 ${fmtTotal(summaryBlock.totalWeighted)}｜视频成品 ${fmtTotal(summaryBlock.totalVideo)}｜AI成品 ${fmtTotal(summaryBlock.totalAi)}｜定额 ${fmtTotal(summaryBlock.totalQuota)}｜差额 ${fmtTotal(summaryBlock.totalDiff)}`;
   const collapsed = periodIndex > 0;
   const rows = [
     { cells: [styledCell(title, "sTitle", { mergeAcross: sectionWidth - 1 })], collapsed }
@@ -4946,6 +5014,7 @@ function mixedExportCheckinValidations(exportPeriods, members, blockWidth, perio
 function buildMixedTableWorkbookXml() {
   const report = selectedReportData();
   return withReportData(report, () => {
+    const exportType = mixedExportTypeValue();
     const exportPeriods = mixedTableExportPeriods(report);
     const start = exportPeriods[exportPeriods.length - 1]?.start || currentDate;
     const end = exportPeriods[0]?.end || currentDate;
@@ -4970,18 +5039,31 @@ function buildMixedTableWorkbookXml() {
     });
     const blockWidth = mixedExportBlock(members[0], 0, group, exportPeriods[0].days, itemNames, periods, report).blockWidth;
     const monthlyBlock = mixedMonthlyReportExportBlock(group, report);
-    const monthlySpacer = [styledCell("", "sSpacer", { mergeAcross: Math.max(monthlyBlock.blockWidth, 1) - 1 })];
-    const rows = [...monthlyBlock.rows, monthlySpacer, ...detailRows];
-    const columns = mergeColumnWidths(mixedExportColumns(blockWidth, itemNames.length, members.length), monthlyBlock.columns);
-    const validations = mixedExportCheckinValidations(exportPeriods, members, blockWidth, periods, report, 6, monthlyBlock.rows.length + 1);
+    const checkinBlock = mixedCheckinExportBlock(exportPeriods, mixedCheckinExportGroup(report, group), report);
+    const rows = [];
+    let columns = [];
+    let validations = [];
+    const addBlock = (blockRows, blockColumns) => {
+      if (rows.length) rows.push([styledCell("", "sSpacer", { mergeAcross: Math.max((blockColumns || []).length, 1) - 1 })]);
+      const offset = rows.length;
+      rows.push(...blockRows);
+      columns = columns.length ? mergeColumnWidths(columns, blockColumns || []) : (blockColumns || []);
+      return offset;
+    };
+    if (exportType === "all" || exportType === "monthly") addBlock(monthlyBlock.rows, monthlyBlock.columns);
+    if (exportType === "all" || exportType === "detail") {
+      const detailOffset = addBlock(detailRows, mixedExportColumns(blockWidth, itemNames.length, members.length));
+      validations = validations.concat(mixedExportCheckinValidations(exportPeriods, members, blockWidth, periods, report, 6, detailOffset));
+    }
+    if (exportType === "all" || exportType === "checkin") addBlock(checkinBlock.rows, checkinBlock.columns);
     const sheet = rowsToStyledWorksheet(`${group || "混合"}总表`, rows, columns);
-    return { group, start, end, name: `${group || "混合"}总表`, rows, columns, validations, xml: styledWorkbookXml([sheet], mixedWorkbookStylesXml()) };
+    return { group, start, end, exportType, name: `${group || "混合"}${mixedExportTypeLabel(exportType)}`, rows, columns, validations, xml: styledWorkbookXml([sheet], mixedWorkbookStylesXml()) };
   });
 }
 function exportMixedTableWorkbook() {
   saveFormSilently();
-  const { group, start, end, name, rows, columns, validations } = buildMixedTableWorkbookXml();
-  downloadBlob(buildXlsxWorkbook(name, rows, columns, { validations }), `mixed_table_${group || "all"}_${start}_${end}.xlsx`);
+  const { group, start, end, exportType, name, rows, columns, validations } = buildMixedTableWorkbookXml();
+  downloadBlob(buildXlsxWorkbook(name, rows, columns, { validations }), `mixed_table_${exportType}_${group || "all"}_${start}_${end}.xlsx`);
 }
 function buildCsvBackups() {
   const itemNames = configuredItems();
