@@ -184,21 +184,30 @@ function normalizeMergedCheckin(value) {
   if (!value) return null;
   const status = normalizeCheckinStatus(typeof value === "string" ? value : value.status || "");
   if (!status) return null;
-  return typeof value === "object" ? { ...clone(value), status } : { status };
+  const next = typeof value === "object" ? { ...clone(value), status } : { status };
+  const updatedAt = String(next.updated_at || next.iso || "").trim();
+  if (updatedAt) {
+    next.iso = next.iso || updatedAt;
+    next.updated_at = next.updated_at || updatedAt;
+  }
+  return next;
 }
-
 function checkinTimestamp(value, record) {
   const source = typeof value === "object" ? (value.iso || value.updated_at || "") : "";
   const time = Date.parse(source);
   return Number.isNaN(time) ? recordTimestamp(record) : time;
 }
-
+function checkinSlotValue(checkins = {}, key = "") {
+  const normalizedKey = key === "afternoon" ? "noon" : key;
+  return checkins?.[normalizedKey] || (normalizedKey === "noon" ? checkins?.afternoon : null);
+}
 function mergeRecordCheckins(aCheckins = {}, bCheckins = {}, aRecord = {}, bRecord = {}, prefer = "first") {
   const merged = {};
-  const keys = new Set(["morning", "noon", "evening", ...Object.keys(aCheckins || {}), ...Object.keys(bCheckins || {})]);
+  const keys = new Set(["morning", "noon", "evening", ...Object.keys(aCheckins || {}).map((key) => key === "afternoon" ? "noon" : key), ...Object.keys(bCheckins || {}).map((key) => key === "afternoon" ? "noon" : key)]);
   keys.forEach((key) => {
-    const left = normalizeMergedCheckin(aCheckins?.[key]);
-    const right = normalizeMergedCheckin(bCheckins?.[key]);
+    if (!["morning", "noon", "evening"].includes(key)) return;
+    const left = normalizeMergedCheckin(checkinSlotValue(aCheckins, key));
+    const right = normalizeMergedCheckin(checkinSlotValue(bCheckins, key));
     if (left && right) {
       const leftTime = checkinTimestamp(left, aRecord);
       const rightTime = checkinTimestamp(right, bRecord);

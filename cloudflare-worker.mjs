@@ -66,17 +66,30 @@ function hasValidToken(request, env, bodyPassword = "") {
   return Boolean(token && tokens.includes(token));
 }
 
+function normalizeCheckinSlot(value) {
+  if (!value) return null;
+  const source = typeof value === "object" ? value : { status: value };
+  const status = String(source.status || "").trim();
+  if (!status) return null;
+  const updatedAt = String(source.iso || source.updated_at || "").trim();
+  return {
+    status,
+    time: source.time ? String(source.time) : "",
+    iso: updatedAt,
+    updated_at: updatedAt
+  };
+}
+
+function checkinSlotTimestamp(value) {
+  const time = Date.parse(value?.iso || value?.updated_at || "");
+  return Number.isNaN(time) ? 0 : time;
+}
+
 function sanitizeCheckins(checkins = {}) {
   const result = {};
   ["morning", "noon", "evening"].forEach((slot) => {
-    const source = checkins?.[slot] || (slot === "noon" ? checkins?.afternoon : null) || {};
-    const status = String(source.status || "").trim();
-    if (!status) return;
-    result[slot] = {
-      status: String(source.status || "").trim(),
-      time: source.time ? String(source.time) : "",
-      updated_at: source.updated_at ? String(source.updated_at) : ""
-    };
+    const normalized = normalizeCheckinSlot(checkins?.[slot] || (slot === "noon" ? checkins?.afternoon : null));
+    if (normalized) result[slot] = normalized;
   });
   return result;
 }
@@ -157,9 +170,17 @@ function newerText(a = "", b = "", prefer = "first") {
 function mergeCheckins(remote = {}, local = {}) {
   const merged = {};
   ["morning", "noon", "evening"].forEach((slot) => {
-    const a = remote?.[slot] || (slot === "noon" ? remote?.afternoon : null) || {};
-    const b = local?.[slot] || (slot === "noon" ? local?.afternoon : null) || {};
-    merged[slot] = newerRecordSide(a, b, "second");
+    const remoteValue = normalizeCheckinSlot(remote?.[slot] || (slot === "noon" ? remote?.afternoon : null));
+    const localValue = normalizeCheckinSlot(local?.[slot] || (slot === "noon" ? local?.afternoon : null));
+    if (remoteValue && localValue) {
+      const remoteTime = checkinSlotTimestamp(remoteValue);
+      const localTime = checkinSlotTimestamp(localValue);
+      merged[slot] = localTime >= remoteTime ? localValue : remoteValue;
+    } else if (localValue) {
+      merged[slot] = localValue;
+    } else if (remoteValue) {
+      merged[slot] = remoteValue;
+    }
   });
   return sanitizeCheckins(merged);
 }
