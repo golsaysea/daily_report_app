@@ -17,6 +17,7 @@ const defaultData = {
   memberQuotas: {},
   dailyQuotas: {},
   monthlyPlans: {},
+  freeTable: { rows: 20, columns: 8, cells: {}, updated_at: "" },
   fbSpecialties: [],
   checkinOptions: ["\u4e0a\u7ebf", "\u8bf7\u5047", "\u71ac\u591c\u8fdf\u5230"],
   adminPassword: "",
@@ -146,6 +147,7 @@ function normalize(source) {
     memberQuotas: loaded.memberQuotas && typeof loaded.memberQuotas === "object" ? clone(loaded.memberQuotas) : {},
     dailyQuotas: loaded.dailyQuotas && typeof loaded.dailyQuotas === "object" ? clone(loaded.dailyQuotas) : {},
     monthlyPlans: loaded.monthlyPlans && typeof loaded.monthlyPlans === "object" ? clone(loaded.monthlyPlans) : {},
+    freeTable: normalizeFreeTable(loaded.freeTable || defaultData.freeTable),
     fbSpecialties: normalizeFbSpecialties(loaded.fbSpecialties || []),
     checkinOptions,
     adminPassword: String(loaded.adminPassword || defaultData.adminPassword),
@@ -315,6 +317,43 @@ function mergeMonthlyPlans(remotePlans = {}, localPlans = {}, mode = "records") 
   return merged;
 }
 
+function defaultFreeTable() {
+  return { rows: 20, columns: 8, cells: {}, updated_at: "" };
+}
+function normalizeFreeTable(table = {}) {
+  const fallback = defaultFreeTable();
+  const rows = Math.max(1, Math.min(200, Number(table.rows || fallback.rows) || fallback.rows));
+  const columns = Math.max(1, Math.min(50, Number(table.columns || fallback.columns) || fallback.columns));
+  const cells = {};
+  Object.entries(table.cells && typeof table.cells === "object" ? table.cells : {}).forEach(([key, value]) => {
+    const match = String(key || "").match(/^(\d+):(\d+)$/);
+    if (!match) return;
+    const row = Number(match[1]);
+    const column = Number(match[2]);
+    if (row < 0 || column < 0 || row >= rows || column >= columns) return;
+    cells[String(row) + ":" + String(column)] = String(value ?? "").slice(0, 10000);
+  });
+  return { rows, columns, cells, updated_at: String(table.updated_at || "") };
+}
+function mergeFreeTable(baseTable = {}, sourceTable = {}) {
+  const base = normalizeFreeTable(baseTable);
+  const source = normalizeFreeTable(sourceTable);
+  const baseTime = Date.parse(base.updated_at || "") || 0;
+  const sourceTime = Date.parse(source.updated_at || "") || 0;
+  const dimensionSource = sourceTime >= baseTime ? source : base;
+  const rows = dimensionSource.rows;
+  const columns = dimensionSource.columns;
+  const cells = {};
+  const putCells = (table) => {
+    Object.entries(table.cells || {}).forEach(([key, value]) => {
+      const [row, column] = key.split(":").map(Number);
+      if (row >= 0 && column >= 0 && row < rows && column < columns) cells[key] = String(value ?? "");
+    });
+  };
+  putCells(base);
+  putCells(source);
+  return { rows, columns, cells, updated_at: [base.updated_at, source.updated_at].filter(Boolean).sort().pop() || "" };
+}
 function normalizeFbSpecialties(items = []) {
   return (Array.isArray(items) ? items : []).map((item) => ({
     id: String(item.id || `fb_${Date.now()}_${Math.random().toString(16).slice(2)}`),
@@ -384,6 +423,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.memberQuotas = clone(local.memberQuotas || {});
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
     merged.monthlyPlans = mergeMonthlyPlans(remote.monthlyPlans, local.monthlyPlans, mode);
+    merged.freeTable = mergeFreeTable(remote.freeTable, local.freeTable);
     merged.fbSpecialties = mergeFbSpecialties(remote.fbSpecialties, local.fbSpecialties);
     merged.checkinOptions = clone(local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(local.quota || 0);
@@ -403,6 +443,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.memberQuotas = clone(remote.memberQuotas || local.memberQuotas || {});
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
     merged.monthlyPlans = mergeMonthlyPlans(remote.monthlyPlans, local.monthlyPlans, mode);
+    merged.freeTable = mergeFreeTable(remote.freeTable, local.freeTable);
     merged.fbSpecialties = mergeFbSpecialties(local.fbSpecialties, remote.fbSpecialties);
     merged.checkinOptions = clone(remote.checkinOptions || local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(remote.quota ?? local.quota ?? 0);

@@ -31,6 +31,7 @@
         <button class="tab" data-view="overview">整体预览</button>
         <button class="tab" data-view="timezones">时区管理</button>
         <button class="tab" data-view="mixed">混合表格</button>
+        <button class="tab" data-view="sheet">自由表格</button>
         <button class="tab" data-view="specialties">专业汇总</button>
         <button class="tab" data-view="admin">管理员</button>
       </nav>
@@ -304,6 +305,25 @@
                 <thead id="mixedCheckinHead"></thead>
                 <tbody id="mixedCheckinBody"></tbody>
               </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="sheetView">
+          <section class="panel free-sheet-panel">
+            <div class="panel-head">
+              <h2>自由表格</h2>
+              <div class="inline-actions sheet-actions">
+                <span class="hint" id="freeSheetHint"></span>
+                <button id="addFreeSheetRowBtn" type="button">新增行</button>
+                <button id="addFreeSheetColumnBtn" type="button">新增列</button>
+                <button id="removeFreeSheetRowBtn" type="button">删除末行</button>
+                <button id="removeFreeSheetColumnBtn" type="button">删除末列</button>
+                <button id="clearFreeSheetBtn" type="button">清空</button>
+              </div>
+            </div>
+            <div class="table-scroll free-sheet-wrap">
+              <table class="free-sheet" id="freeSheetTable"></table>
             </div>
           </section>
         </section>

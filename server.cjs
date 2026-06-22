@@ -22,6 +22,7 @@ const defaultData = {
   memberQuotas: {},
   dailyQuotas: {},
   monthlyPlans: {},
+  freeTable: { rows: 20, columns: 8, cells: {}, updated_at: "" },
   fbSpecialties: [],
   checkinOptions: ["\u4e0a\u7ebf", "\u8bf7\u5047", "\u71ac\u591c\u8fdf\u5230"],
   adminPassword: "",
@@ -65,6 +66,17 @@ function normalizeRecordMap(records = {}) {
   return normalized;
 }
 
+function defaultFreeTable() {
+  return { rows: 20, columns: 8, cells: {}, updated_at: "" };
+}
+function normalizeFreeTable(table = {}) {
+  const fallback = defaultFreeTable();
+  const rows = Math.max(1, Math.min(200, Number(table.rows || fallback.rows) || fallback.rows));
+  const columns = Math.max(1, Math.min(50, Number(table.columns || fallback.columns) || fallback.columns));
+  const cells = table.cells && typeof table.cells === "object" ? table.cells : {};
+  return { rows, columns, cells, updated_at: String(table.updated_at || "") };
+}
+
 function normalize(source) {
   const loaded = source && typeof source === "object" ? source : {};
   const data = { ...clone(defaultData), ...loaded };
@@ -78,6 +90,7 @@ function normalize(source) {
   data.memberQuotas = data.memberQuotas && typeof data.memberQuotas === "object" ? data.memberQuotas : {};
   data.dailyQuotas = data.dailyQuotas && typeof data.dailyQuotas === "object" ? data.dailyQuotas : {};
   data.monthlyPlans = data.monthlyPlans && typeof data.monthlyPlans === "object" ? data.monthlyPlans : {};
+  data.freeTable = normalizeFreeTable(data.freeTable || defaultData.freeTable);
   data.fbSpecialties = Array.isArray(data.fbSpecialties) ? data.fbSpecialties : [];
   data.checkinOptions = Array.isArray(data.checkinOptions) && data.checkinOptions.length
     ? Array.from(new Set(data.checkinOptions.map(normalizeCheckinStatus).filter(Boolean)))

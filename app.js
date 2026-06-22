@@ -12,6 +12,7 @@
   memberQuotas: {},
   dailyQuotas: {},
   monthlyPlans: {},
+  freeTable: { rows: 20, columns: 8, cells: {}, updated_at: "" },
   checkinOptions: ["准时上线", "迟到", "请假", "上班", "已讲", "准时下线", "伯日", "值日", "请假生病", "聚会", "运动", "其他本分", "上学", "听评", "熬夜", "拍摄"],
   timezones: [
     { name: "澳大利亚时间", offset: "+10:00" },
@@ -87,6 +88,7 @@ let activeView = "entry";
 let saveTimer = 0;
 let draftTimer = 0;
 let recordCloudSaveTimer = 0;
+let freeTableSaveTimer = 0;
 let adminUnlocked = false;
 let showAllEntryItems = false;
 let appUnlocked = false;
@@ -239,6 +241,43 @@ function mergeMonthlyPlans(basePlans = {}, sourcePlans = {}) {
   });
   return merged;
 }
+function defaultFreeTable() {
+  return { rows: 20, columns: 8, cells: {}, updated_at: "" };
+}
+function normalizeFreeTable(table = {}) {
+  const fallback = defaultFreeTable();
+  const rows = Math.max(1, Math.min(200, Number(table.rows || fallback.rows) || fallback.rows));
+  const columns = Math.max(1, Math.min(50, Number(table.columns || fallback.columns) || fallback.columns));
+  const cells = {};
+  Object.entries(table.cells && typeof table.cells === "object" ? table.cells : {}).forEach(([key, value]) => {
+    const match = String(key || "").match(/^(\d+):(\d+)$/);
+    if (!match) return;
+    const row = Number(match[1]);
+    const column = Number(match[2]);
+    if (row < 0 || column < 0 || row >= rows || column >= columns) return;
+    cells[String(row) + ":" + String(column)] = String(value ?? "").slice(0, 10000);
+  });
+  return { rows, columns, cells, updated_at: String(table.updated_at || "") };
+}
+function mergeFreeTable(baseTable = {}, sourceTable = {}) {
+  const base = normalizeFreeTable(baseTable);
+  const source = normalizeFreeTable(sourceTable);
+  const baseTime = Date.parse(base.updated_at || "") || 0;
+  const sourceTime = Date.parse(source.updated_at || "") || 0;
+  const dimensionSource = sourceTime >= baseTime ? source : base;
+  const rows = dimensionSource.rows;
+  const columns = dimensionSource.columns;
+  const cells = {};
+  const putCells = (table) => {
+    Object.entries(table.cells || {}).forEach(([key, value]) => {
+      const [row, column] = key.split(":").map(Number);
+      if (row >= 0 && column >= 0 && row < rows && column < columns) cells[key] = String(value ?? "");
+    });
+  };
+  putCells(base);
+  putCells(source);
+  return { rows, columns, cells, updated_at: [base.updated_at, source.updated_at].filter(Boolean).sort().pop() || "" };
+}
 function normalizeFbSpecialties(items = []) {
   return (Array.isArray(items) ? items : []).map((item) => ({
     id: String(item.id || `fb_${Date.now()}_${Math.random().toString(16).slice(2)}`),
@@ -320,6 +359,7 @@ function normalize(source) {
   const memberQuotas = { ...(loaded.memberQuotas || {}) };
   const dailyQuotas = loaded.dailyQuotas && typeof loaded.dailyQuotas === "object" ? clone(loaded.dailyQuotas) : {};
   const monthlyPlans = normalizeMonthlyPlans(loaded.monthlyPlans || {});
+  const freeTable = normalizeFreeTable(loaded.freeTable || defaultData.freeTable);
   const fbSpecialties = normalizeFbSpecialties(loaded.fbSpecialties || []);
   const checkinOptions = normalizeCheckinOptions([...(Array.isArray(loaded.checkinOptions) ? loaded.checkinOptions : []), ...defaultData.checkinOptions]);
   return {
@@ -337,6 +377,7 @@ function normalize(source) {
     memberQuotas,
     dailyQuotas,
     monthlyPlans,
+    freeTable,
     fbSpecialties,
     checkinOptions,
     timezones: Array.isArray(loaded.timezones) && loaded.timezones.length
@@ -556,6 +597,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.memberQuotas = clone(local.memberQuotas || {});
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
     merged.monthlyPlans = mergeMonthlyPlans(remote.monthlyPlans, local.monthlyPlans);
+    merged.freeTable = mergeFreeTable(remote.freeTable, local.freeTable);
     merged.fbSpecialties = mergeFbSpecialties(remote.fbSpecialties, local.fbSpecialties);
     merged.checkinOptions = clone(local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(local.quota || 0);
@@ -576,6 +618,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.memberQuotas = clone(remote.memberQuotas || local.memberQuotas || {});
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
     merged.monthlyPlans = mergeMonthlyPlans(local.monthlyPlans, remote.monthlyPlans);
+    merged.freeTable = mergeFreeTable(remote.freeTable, local.freeTable);
     merged.fbSpecialties = mergeFbSpecialties(local.fbSpecialties, remote.fbSpecialties);
     merged.checkinOptions = clone(remote.checkinOptions || local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(remote.quota ?? local.quota ?? 0);
@@ -608,6 +651,7 @@ function mergeSummaryData(baseSource, sourceData) {
     memberQuotas: { ...base.memberQuotas, ...source.memberQuotas },
     dailyQuotas: mergeDailyQuotas(base.dailyQuotas, source.dailyQuotas, "records"),
     monthlyPlans: mergeMonthlyPlans(base.monthlyPlans, source.monthlyPlans),
+    freeTable: mergeFreeTable(base.freeTable, source.freeTable),
     fbSpecialties: mergeFbSpecialties(base.fbSpecialties, source.fbSpecialties),
     checkinOptions: Array.from(new Set([...(base.checkinOptions || []), ...(source.checkinOptions || [])])),
     records: { ...base.records }
@@ -632,6 +676,7 @@ function mergeAdminCenterData(baseSource, sourceData) {
     memberQuotas: { ...source.memberQuotas, ...base.memberQuotas },
     dailyQuotas: mergeDailyQuotas(source.dailyQuotas, base.dailyQuotas, "records"),
     monthlyPlans: mergeMonthlyPlans(source.monthlyPlans, base.monthlyPlans),
+    freeTable: mergeFreeTable(source.freeTable, base.freeTable),
     fbSpecialties: mergeFbSpecialties(source.fbSpecialties, base.fbSpecialties),
     checkinOptions: Array.from(new Set([...(base.checkinOptions || []), ...(source.checkinOptions || [])])),
     records: { ...base.records }
@@ -651,6 +696,7 @@ function makeEmptySummary(seed = data) {
   empty.memberQuotas = {};
   empty.dailyQuotas = {};
   empty.monthlyPlans = {};
+  empty.freeTable = defaultFreeTable();
   empty.fbSpecialties = [];
   empty.records = {};
   return empty;
@@ -3836,6 +3882,106 @@ function renderTimezones() {
     };
   });
 }
+function freeTableCellKey(rowIndex, columnIndex) {
+  return String(rowIndex) + ":" + String(columnIndex);
+}
+function freeTableColumnLabel(index) {
+  let label = "";
+  let value = Number(index || 0) + 1;
+  while (value > 0) {
+    const mod = (value - 1) % 26;
+    label = String.fromCharCode(65 + mod) + label;
+    value = Math.floor((value - mod - 1) / 26);
+  }
+  return label;
+}
+function currentFreeTable() {
+  data.freeTable = normalizeFreeTable(data.freeTable || defaultData.freeTable);
+  return data.freeTable;
+}
+function scheduleFreeTableSave() {
+  window.clearTimeout(freeTableSaveTimer);
+  freeTableSaveTimer = window.setTimeout(() => scheduleSave("records"), 900);
+}
+function renderFreeTable() {
+  const tableEl = $("freeSheetTable");
+  if (!tableEl) return;
+  const table = currentFreeTable();
+  $("freeSheetHint").textContent = String(table.rows) + " 行 / " + String(table.columns) + " 列 / 自动保存";
+  const headerCells = Array.from({ length: table.columns }, (_, column) => "<th>" + freeTableColumnLabel(column) + "</th>").join("");
+  const rows = Array.from({ length: table.rows }, (_, row) => {
+    const cells = Array.from({ length: table.columns }, (_, column) => {
+      const key = freeTableCellKey(row, column);
+      return "<td><textarea data-free-sheet-cell data-row=\"" + row + "\" data-column=\"" + column + "\" rows=\"1\">" + escapeHtml(table.cells[key] || "") + "</textarea></td>";
+    }).join("");
+    return "<tr><th class=\"sheet-row-head\">" + String(row + 1) + "</th>" + cells + "</tr>";
+  }).join("");
+  tableEl.innerHTML = "<thead><tr><th class=\"sheet-corner\"></th>" + headerCells + "</tr></thead><tbody>" + rows + "</tbody>";
+  tableEl.querySelectorAll("[data-free-sheet-cell]").forEach((input) => {
+    input.oninput = () => updateFreeTableCell(input);
+    input.onkeydown = (event) => {
+      if (event.key !== "Tab") return;
+      event.preventDefault();
+      const row = Number(input.dataset.row || 0);
+      const column = Number(input.dataset.column || 0) + (event.shiftKey ? -1 : 1);
+      const nextColumn = Math.max(0, Math.min(table.columns - 1, column));
+      const next = tableEl.querySelector("[data-row=\"" + row + "\"][data-column=\"" + nextColumn + "\"]");
+      if (next) next.focus();
+    };
+  });
+}
+function touchFreeTable() {
+  currentFreeTable().updated_at = new Date().toISOString();
+  persistLocal();
+  scheduleFreeTableSave();
+}
+function updateFreeTableCell(input) {
+  const table = currentFreeTable();
+  const key = freeTableCellKey(Number(input.dataset.row || 0), Number(input.dataset.column || 0));
+  table.cells[key] = input.value;
+  touchFreeTable();
+}
+function addFreeTableRow() {
+  const table = currentFreeTable();
+  table.rows = Math.min(200, table.rows + 1);
+  touchFreeTable();
+  renderFreeTable();
+}
+function addFreeTableColumn() {
+  const table = currentFreeTable();
+  table.columns = Math.min(50, table.columns + 1);
+  touchFreeTable();
+  renderFreeTable();
+}
+function removeFreeTableRow() {
+  const table = currentFreeTable();
+  if (table.rows <= 1) return alert("表格至少保留 1 行。");
+  const nextRows = table.rows - 1;
+  Object.keys(table.cells || {}).forEach((key) => {
+    if (Number(key.split(":")[0]) >= nextRows) delete table.cells[key];
+  });
+  table.rows = nextRows;
+  touchFreeTable();
+  renderFreeTable();
+}
+function removeFreeTableColumn() {
+  const table = currentFreeTable();
+  if (table.columns <= 1) return alert("表格至少保留 1 列。");
+  const nextColumns = table.columns - 1;
+  Object.keys(table.cells || {}).forEach((key) => {
+    if (Number(key.split(":")[1]) >= nextColumns) delete table.cells[key];
+  });
+  table.columns = nextColumns;
+  touchFreeTable();
+  renderFreeTable();
+}
+function clearFreeTable() {
+  const table = currentFreeTable();
+  if (!confirm("确定清空自由表格内容？")) return;
+  Object.keys(table.cells || {}).forEach((key) => { table.cells[key] = ""; });
+  touchFreeTable();
+  renderFreeTable();
+}
 function renderAdminSettings() {
   $("autoAuditToggle").checked = false;
   $("sheetBackupToggle").checked = data.sheetBackupEnabled !== false;
@@ -4038,6 +4184,7 @@ function render() {
   renderCloudBackupPanel();
   renderCloudHistoryPanel();
   renderTimezones();
+  renderFreeTable();
   renderSpecialties();
   renderSummaryFolders();
   renderAdminCenterPanel();
@@ -5610,6 +5757,11 @@ function bindEvents() {
     renderTimezones();
     scheduleSave("admin");
   };
+  $("addFreeSheetRowBtn").onclick = addFreeTableRow;
+  $("addFreeSheetColumnBtn").onclick = addFreeTableColumn;
+  $("removeFreeSheetRowBtn").onclick = removeFreeTableRow;
+  $("removeFreeSheetColumnBtn").onclick = removeFreeTableColumn;
+  $("clearFreeSheetBtn").onclick = clearFreeTable;
   $("addSpecialtyBtn").onclick = addSpecialty;
   $("deleteSpecialtyBtn").onclick = deleteActiveSpecialty;
   $("saveSpecialtyBtn").onclick = saveActiveSpecialty;
