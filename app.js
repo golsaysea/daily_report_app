@@ -2362,10 +2362,15 @@ async function saveAndAudit() {
   if (data.sheetBackupEnabled !== false) await backupSheets(true);
   render();
   if (!result?.written) {
-    const message = result?.reason === "cloud-quota-paused"
+    const baseMessage = result?.reason === "cloud-quota-paused"
       ? "云数据库额度已满或暂时不可用，这次已保存到本机浏览器草稿。请先恢复云同步服务，或选择团队共享文件夹作为临时备份后再重新提交。"
       : "这次只保存到了本机浏览器缓存。请确认云同步已配置应用密码，或点击顶部“云端文件夹”选择团队共享文件夹后重新提交。";
-    showDialog("未同步到总数据", message, "");
+    const detail = [
+      "当前通道：" + cloudSyncProviderLabel(),
+      "云同步状态：" + (cloudDbStatusText || "未知"),
+      result?.reason ? "失败原因：" + result.reason : ""
+    ].filter(Boolean).join("\n");
+    showDialog("未同步到总数据", baseMessage + "\n\n" + detail, "");
   } else if (result.cloudDbWritten && !result.folderWritten) {
     showDialog(`已提交到${cloudSyncProviderLabel()}`, `记录已经写入${cloudSyncProviderLabel()}，等待管理员人工审核。当前没有写入文件夹备份。`, "");
   } else {
