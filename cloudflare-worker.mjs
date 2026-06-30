@@ -31,6 +31,8 @@ const corsBaseHeaders = {
   "Access-Control-Allow-Headers": "Content-Type,X-Team-Token,X-App-Password",
   "Access-Control-Max-Age": "86400"
 };
+const cloudEventKeepCount = 6;
+const cloudEventListCount = 20;
 
 function normalizeAllowedOrigin(value) {
   const text = String(value || "").trim().replace(/\/+$/, "");
@@ -541,6 +543,57 @@ function publicStateMeta(state) {
   };
 }
 
+function shouldWriteHistoryEvent(mode = "records", source = "") {
+  return String(mode || "records") === "admin" || String(source || "") === "history-restore";
+}
+
+function isDatabaseSizeError(error) {
+  const text = `${error?.message || ""} ${error?.stack || ""}`.toLowerCase();
+  return /maximum db size|maximum database size|database.*size|storage.*limit/.test(text);
+}
+
+async function optimizeDatabase(db) {
+  try {
+    await db.prepare("PRAGMA optimize").run();
+  } catch {}
+}
+
+async function pruneEvents(db, keepCount = cloudEventKeepCount) {
+  const keep = Math.max(0, Math.min(80, Number(keepCount) || 0));
+  let result;
+  if (keep <= 0) {
+    result = await db.prepare(`DELETE FROM daily_report_cloud_events`).run();
+  } else {
+    result = await db.prepare(`
+      DELETE FROM daily_report_cloud_events
+      WHERE id NOT IN (
+        SELECT id FROM daily_report_cloud_events
+        ORDER BY created_at DESC
+        LIMIT ?
+      )
+    `).bind(keep).run();
+  }
+  await optimizeDatabase(db);
+  return Number(result?.meta?.changes ?? 0);
+}
+
+function latestStateStatement(db, now, normalized, source, stats, sha, serialized) {
+  return db.prepare(`
+    INSERT INTO daily_report_cloud_state
+      (id, updated_at, client_updated_at, source, record_count, member_count, group_count, data_sha256, data)
+    VALUES ('latest', ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      updated_at = excluded.updated_at,
+      client_updated_at = excluded.client_updated_at,
+      source = excluded.source,
+      record_count = excluded.record_count,
+      member_count = excluded.member_count,
+      group_count = excluded.group_count,
+      data_sha256 = excluded.data_sha256,
+      data = excluded.data
+  `).bind(now, normalized.updated_at || now, source, stats.recordCount, stats.memberCount, stats.groupCount, sha, serialized);
+}
+
 async function writeState(db, env, nextData, source = "team-sync", actor = "", mode = "records") {
   const normalized = normalize(nextData);
   normalized.updated_at = new Date().toISOString();
@@ -548,38 +601,55 @@ async function writeState(db, env, nextData, source = "team-sync", actor = "", m
   const serialized = await encodeStoredData(normalized, env);
   const sha = await digestData(normalized);
   const stats = dataStats(normalized);
-  const eventId = `event_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
-  await db.batch([
-    db.prepare(`
-      INSERT INTO daily_report_cloud_state
-        (id, updated_at, client_updated_at, source, record_count, member_count, group_count, data_sha256, data)
-      VALUES ('latest', ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        updated_at = excluded.updated_at,
-        client_updated_at = excluded.client_updated_at,
-        source = excluded.source,
-        record_count = excluded.record_count,
-        member_count = excluded.member_count,
-        group_count = excluded.group_count,
-        data_sha256 = excluded.data_sha256,
-        data = excluded.data
-    `).bind(now, normalized.updated_at || now, source, stats.recordCount, stats.memberCount, stats.groupCount, sha, serialized),
-    db.prepare(`
-      INSERT INTO daily_report_cloud_events
-        (id, created_at, actor, mode, source, record_count, member_count, group_count, data_sha256, data)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(eventId, now, String(actor || "").slice(0, 80), String(mode || "records").slice(0, 30), source, stats.recordCount, stats.memberCount, stats.groupCount, sha, serialized)
-  ]);
+  let eventId = "";
+  let prunedEvents = 0;
+
+  try {
+    prunedEvents += await pruneEvents(db, cloudEventKeepCount);
+  } catch (error) {
+    if (!isDatabaseSizeError(error)) throw error;
+  }
+
+  try {
+    await latestStateStatement(db, now, normalized, source, stats, sha, serialized).run();
+  } catch (error) {
+    if (!isDatabaseSizeError(error)) throw error;
+    try {
+      prunedEvents += await pruneEvents(db, 0);
+    } catch {}
+    await latestStateStatement(db, now, normalized, source, stats, sha, serialized).run();
+  }
+
+  if (shouldWriteHistoryEvent(mode, source)) {
+    eventId = `event_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+    try {
+      await db.prepare(`
+        INSERT INTO daily_report_cloud_events
+          (id, created_at, actor, mode, source, record_count, member_count, group_count, data_sha256, data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(eventId, now, String(actor || "").slice(0, 80), String(mode || "records").slice(0, 30), source, stats.recordCount, stats.memberCount, stats.groupCount, sha, serialized).run();
+      prunedEvents += await pruneEvents(db, cloudEventKeepCount);
+    } catch (error) {
+      if (!isDatabaseSizeError(error)) throw error;
+      eventId = "";
+      try {
+        prunedEvents += await pruneEvents(db, 0);
+      } catch {}
+    }
+  }
+
   return {
     data: normalized,
     meta: {
+      event_id: eventId,
       updated_at: now,
       client_updated_at: normalized.updated_at,
       source,
       record_count: stats.recordCount,
       member_count: stats.memberCount,
       group_count: stats.groupCount,
-      data_sha256: sha
+      data_sha256: sha,
+      pruned_events: prunedEvents
     }
   };
 }
@@ -589,11 +659,10 @@ async function listEvents(db) {
     SELECT id, created_at, actor, mode, source, record_count, member_count, group_count, data_sha256
     FROM daily_report_cloud_events
     ORDER BY created_at DESC
-    LIMIT 50
-  `).all();
+    LIMIT ?
+  `).bind(cloudEventListCount).all();
   return result.results || [];
 }
-
 async function restoreEvent(db, env, eventId) {
   const row = await db.prepare(`SELECT id, actor, data FROM daily_report_cloud_events WHERE id = ? LIMIT 1`).bind(eventId).first();
   if (!row) return { error: "没有找到这个历史版本。", status: 404 };
@@ -629,6 +698,12 @@ async function handleCloudData(request, env) {
   if (action === "pull") {
     const state = await readState(env.DB, env, true);
     return json({ ok: true, data: state?.data || null, meta: publicStateMeta(state) });
+  }
+  if (action === "cleanup" || action === "compact") {
+    const keep = Math.max(0, Math.min(80, Number(body.keep ?? 0) || 0));
+    const deletedEvents = await pruneEvents(env.DB, keep);
+    const state = await readState(env.DB, env, false);
+    return json({ ok: true, deleted_events: deletedEvents, meta: publicStateMeta(state) });
   }
   if (action === "history") return json({ ok: true, events: await listEvents(env.DB) });
   if (action === "restore_history") {

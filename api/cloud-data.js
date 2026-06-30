@@ -2,6 +2,8 @@ const crypto = require("crypto");
 const { neon } = require("@neondatabase/serverless");
 
 const maxBodyBytes = 8 * 1024 * 1024;
+const cloudEventKeepCount = 6;
+const cloudEventListCount = 20;
 let schemaReady = false;
 
 const defaultData = {
@@ -78,6 +80,15 @@ function send(res, statusCode, payload) {
 function isQuotaError(error) {
   const text = `${error?.message || ""} ${JSON.stringify(error || {})}`.toLowerCase();
   return Number(error?.statusCode || error?.status || 0) === 402 || /quota|额度|transfer/.test(text);
+}
+
+function isStoragePressureError(error) {
+  const text = `${error?.message || ""} ${JSON.stringify(error || {})}`.toLowerCase();
+  return isQuotaError(error) || /maximum.*db.*size|maximum.*database.*size|database.*size|storage.*limit/.test(text);
+}
+
+function shouldWriteHistoryEvent(mode = "records", source = "") {
+  return String(mode || "records") === "admin" || String(source || "") === "history-restore";
 }
 
 function authTokens(extraTokens = []) {
@@ -559,34 +570,85 @@ function publicStateMeta(state) {
   };
 }
 
+async function pruneEvents(sql, keepCount = cloudEventKeepCount) {
+  const keep = Math.max(0, Math.min(80, Number(keepCount) || 0));
+  if (keep <= 0) {
+    await sql`DELETE FROM daily_report_cloud_events`;
+  } else {
+    await sql`
+      DELETE FROM daily_report_cloud_events
+      WHERE id NOT IN (
+        SELECT id FROM daily_report_cloud_events
+        ORDER BY created_at DESC
+        LIMIT ${keep}
+      )
+    `;
+  }
+  return true;
+}
+
 async function writeState(sql, nextData, source = "team-sync", actor = "", mode = "records") {
   const normalized = normalize(nextData);
   normalized.updated_at = new Date().toISOString();
   const json = JSON.stringify(normalized);
   const sha = digestData(normalized);
   const stats = dataStats(normalized);
-  const eventId = `event_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
-  await sql`
-    INSERT INTO daily_report_cloud_state
-      (id, updated_at, client_updated_at, source, record_count, member_count, group_count, data_sha256, data)
-    VALUES
-      ('latest', NOW(), ${stats.clientUpdatedAt}, ${source}, ${stats.recordCount}, ${stats.memberCount}, ${stats.groupCount}, ${sha}, ${json}::jsonb)
-    ON CONFLICT (id) DO UPDATE SET
-      updated_at = NOW(),
-      client_updated_at = EXCLUDED.client_updated_at,
-      source = EXCLUDED.source,
-      record_count = EXCLUDED.record_count,
-      member_count = EXCLUDED.member_count,
-      group_count = EXCLUDED.group_count,
-      data_sha256 = EXCLUDED.data_sha256,
-      data = EXCLUDED.data
-  `;
-  await sql`
-    INSERT INTO daily_report_cloud_events
-      (id, actor, mode, source, record_count, member_count, group_count, data_sha256, data)
-    VALUES
-      (${eventId}, ${String(actor || "").slice(0, 80)}, ${String(mode || "records").slice(0, 30)}, ${source}, ${stats.recordCount}, ${stats.memberCount}, ${stats.groupCount}, ${sha}, ${json}::jsonb)
-  `;
+  let eventId = "";
+  let prunedEvents = false;
+
+  try {
+    prunedEvents = await pruneEvents(sql, cloudEventKeepCount);
+  } catch (error) {
+    if (!isStoragePressureError(error)) throw error;
+  }
+
+  async function upsertLatestState() {
+    await sql`
+      INSERT INTO daily_report_cloud_state
+        (id, updated_at, client_updated_at, source, record_count, member_count, group_count, data_sha256, data)
+      VALUES
+        ('latest', NOW(), ${stats.clientUpdatedAt}, ${source}, ${stats.recordCount}, ${stats.memberCount}, ${stats.groupCount}, ${sha}, ${json}::jsonb)
+      ON CONFLICT (id) DO UPDATE SET
+        updated_at = NOW(),
+        client_updated_at = EXCLUDED.client_updated_at,
+        source = EXCLUDED.source,
+        record_count = EXCLUDED.record_count,
+        member_count = EXCLUDED.member_count,
+        group_count = EXCLUDED.group_count,
+        data_sha256 = EXCLUDED.data_sha256,
+        data = EXCLUDED.data
+    `;
+  }
+
+  try {
+    await upsertLatestState();
+  } catch (error) {
+    if (!isStoragePressureError(error)) throw error;
+    try {
+      prunedEvents = await pruneEvents(sql, 0);
+    } catch {}
+    await upsertLatestState();
+  }
+
+  if (shouldWriteHistoryEvent(mode, source)) {
+    eventId = `event_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+    try {
+      await sql`
+        INSERT INTO daily_report_cloud_events
+          (id, actor, mode, source, record_count, member_count, group_count, data_sha256, data)
+        VALUES
+          (${eventId}, ${String(actor || "").slice(0, 80)}, ${String(mode || "records").slice(0, 30)}, ${source}, ${stats.recordCount}, ${stats.memberCount}, ${stats.groupCount}, ${sha}, ${json}::jsonb)
+      `;
+      prunedEvents = await pruneEvents(sql, cloudEventKeepCount);
+    } catch (error) {
+      if (!isStoragePressureError(error)) throw error;
+      eventId = "";
+      try {
+        prunedEvents = await pruneEvents(sql, 0);
+      } catch {}
+    }
+  }
+
   return {
     data: normalized,
     meta: {
@@ -597,7 +659,8 @@ async function writeState(sql, nextData, source = "team-sync", actor = "", mode 
       record_count: stats.recordCount,
       member_count: stats.memberCount,
       group_count: stats.groupCount,
-      data_sha256: sha
+      data_sha256: sha,
+      pruned_events: prunedEvents
     }
   };
 }
@@ -622,7 +685,7 @@ async function listEvents(sql) {
     SELECT id, created_at, actor, mode, source, record_count, member_count, group_count, data_sha256
     FROM daily_report_cloud_events
     ORDER BY created_at DESC
-    LIMIT 80
+    LIMIT ${cloudEventListCount}
   `;
   return rows.map(publicEvent);
 }
@@ -678,6 +741,12 @@ module.exports = async function handler(req, res) {
     if (action === "pull") {
       const state = await readState(sql);
       return send(res, 200, { ok: true, data: state?.data || null, meta: publicStateMeta(state) });
+    }
+    if (action === "cleanup" || action === "compact") {
+      const keep = Math.max(0, Math.min(80, Number(body.keep ?? 0) || 0));
+      const deletedEvents = await pruneEvents(sql, keep);
+      const state = await readStateMeta(sql);
+      return send(res, 200, { ok: true, deleted_events: deletedEvents, meta: publicStateMeta(state) });
     }
     if (action === "history") {
       return send(res, 200, { ok: true, events: await listEvents(sql) });
