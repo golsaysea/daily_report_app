@@ -4220,6 +4220,7 @@ function closeDialog() {
 }
 async function unlockApp() {
   const password = $("appPasswordInput").value.trim();
+  await loadCloudSyncConfig();
   saveCloudSyncEndpoint($("cloudSyncEndpointInput")?.value || cloudSyncEndpoint);
   $("lockHint").textContent = "正在验证应用密码...";
   const auth = await verifyAppPassword(password);
