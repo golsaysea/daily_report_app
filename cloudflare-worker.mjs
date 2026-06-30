@@ -52,8 +52,11 @@ function configuredAllowedOrigins(env = {}) {
 function isAllowedCorsOrigin(origin, env = {}) {
   const normalized = normalizeAllowedOrigin(origin);
   if (!normalized) return true;
+  if (normalized === "null") return true;
   if (configuredAllowedOrigins(env).includes(normalized)) return true;
   if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(normalized)) return true;
+  if (/^https:\/\/[a-z0-9-]+\.pages\.dev$/i.test(normalized)) return true;
+  if (/^https:\/\/[a-z0-9-]+\.github\.io$/i.test(normalized)) return true;
   if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized)) return true;
   return false;
 }
