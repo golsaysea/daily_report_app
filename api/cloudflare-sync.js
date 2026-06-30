@@ -100,11 +100,12 @@ function sendUpstream(res, upstream) {
     try {
       JSON.parse(body || "{}");
     } catch {
+      const snippet = body.replace(/\s+/g, " ").trim().slice(0, 300);
       body = JSON.stringify({
         ok: false,
-        error: "Cloudflare Worker returned a non-JSON response.",
+        error: `Cloudflare Worker returned a non-JSON response (status ${upstream.status})${snippet ? `: ${snippet}` : ""}`,
         upstream_status: upstream.status,
-        upstream_body: body.slice(0, 500)
+        upstream_body: body.slice(0, 1000)
       });
     }
   }

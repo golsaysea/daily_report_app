@@ -1177,9 +1177,10 @@ async function callCloudData(action, payload = {}, token = appSessionPassword) {
   try {
     result = text ? JSON.parse(text) : {};
   } catch {
-    const error = new Error(`${cloudSyncProviderLabel()}返回了非 JSON 响应：${response.status}`);
+    const snippet = text.replace(/\s+/g, " ").trim().slice(0, 240);
+    const error = new Error(`${cloudSyncProviderLabel()}\u8fd4\u56de\u4e86\u975e JSON \u54cd\u5e94\uff1a${response.status}${snippet ? `\uff1a${snippet}` : ""}`);
     error.status = response.status;
-    error.payload = { raw: text.slice(0, 500) };
+    error.payload = { raw: text.slice(0, 1000) };
     throw error;
   }
   if (!response.ok || result.ok === false) {
