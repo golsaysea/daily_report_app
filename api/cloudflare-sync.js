@@ -1,4 +1,8 @@
+const http = require("http");
+const https = require("https");
+
 const maxBodyBytes = 8 * 1024 * 1024;
+const requestTimeoutMs = 30000;
 
 function send(res, statusCode, payload) {
   res.statusCode = statusCode;
@@ -34,21 +38,22 @@ function isAllowedPath(path) {
   return ["/api/cloud-data", "/cloud-data", "/api/app-auth", "/app-auth"].includes(path);
 }
 
-function forwardedHeaders(req) {
-  const headers = {};
+function forwardedHeaders(req, body) {
+  const headers = { Accept: "application/json" };
   const contentType = req.headers["content-type"];
   if (contentType) headers["Content-Type"] = String(contentType);
   const teamToken = req.headers["x-team-token"];
   if (teamToken) headers["X-Team-Token"] = String(teamToken);
   const appPassword = req.headers["x-app-password"];
   if (appPassword) headers["X-App-Password"] = String(appPassword);
+  if (body && body.length) headers["Content-Length"] = Buffer.byteLength(body);
   return headers;
 }
 
 async function readRawBody(req) {
   if (req.body && Buffer.isBuffer(req.body)) return req.body;
-  if (typeof req.body === "string") return req.body;
-  if (req.body && typeof req.body === "object") return JSON.stringify(req.body);
+  if (typeof req.body === "string") return Buffer.from(req.body);
+  if (req.body && typeof req.body === "object") return Buffer.from(JSON.stringify(req.body));
   return await new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
@@ -66,6 +71,49 @@ async function readRawBody(req) {
   });
 }
 
+function requestUpstream(url, method, headers, body) {
+  const target = new URL(url);
+  const client = target.protocol === "http:" ? http : https;
+  return new Promise((resolve, reject) => {
+    const request = client.request(target, { method, headers }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      response.on("end", () => resolve({
+        status: response.statusCode || 502,
+        headers: response.headers || {},
+        body: Buffer.concat(chunks).toString("utf8")
+      }));
+    });
+    request.setTimeout(requestTimeoutMs, () => {
+      request.destroy(new Error("Cloudflare Worker request timed out."));
+    });
+    request.on("error", reject);
+    if (body && body.length && method !== "GET") request.write(body);
+    request.end();
+  });
+}
+
+function sendUpstream(res, upstream) {
+  const contentType = String(upstream.headers["content-type"] || "");
+  let body = upstream.body || "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    try {
+      JSON.parse(body || "{}");
+    } catch {
+      body = JSON.stringify({
+        ok: false,
+        error: "Cloudflare Worker returned a non-JSON response.",
+        upstream_status: upstream.status,
+        upstream_body: body.slice(0, 500)
+      });
+    }
+  }
+  res.statusCode = upstream.status;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  res.end(body);
+}
+
 module.exports = async function handler(req, res) {
   try {
     if (req.method === "OPTIONS") return send(res, 204, {});
@@ -75,16 +123,9 @@ module.exports = async function handler(req, res) {
     const url = new URL(req.url, "http://" + (req.headers.host || "localhost"));
     const path = normalizePath(url.searchParams.get("path") || "");
     if (!isAllowedPath(path)) return send(res, 400, { ok: false, error: "Unsupported Cloudflare sync path." });
-    const response = await fetch(endpoint + path, {
-      method: req.method,
-      headers: forwardedHeaders(req),
-      body: req.method === "GET" ? undefined : await readRawBody(req)
-    });
-    const text = await response.text();
-    res.statusCode = response.status;
-    res.setHeader("Content-Type", response.headers.get("content-type") || "application/json; charset=utf-8");
-    res.setHeader("Cache-Control", "no-store");
-    res.end(text);
+    const body = req.method === "GET" ? null : await readRawBody(req);
+    const upstream = await requestUpstream(endpoint + path, req.method, forwardedHeaders(req, body), body);
+    return sendUpstream(res, upstream);
   } catch (error) {
     return send(res, 502, { ok: false, error: error.message || "Cloudflare sync proxy failed." });
   }
