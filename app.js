@@ -1152,6 +1152,7 @@ async function callCloudData(action, payload = {}, token = appSessionPassword) {
   if (!syncToken) throw new Error("请先输入应用密码。");
   const response = await fetch(cloudApiUrl("/api/cloud-data"), {
     method: "POST",
+    cache: "no-store",
     headers: {
       "Content-Type": "application/json",
       "X-Team-Token": syncToken
@@ -1159,7 +1160,15 @@ async function callCloudData(action, payload = {}, token = appSessionPassword) {
     body: JSON.stringify({ action, ...payload })
   });
   const text = await response.text();
-  const result = text ? JSON.parse(text) : {};
+  let result = {};
+  try {
+    result = text ? JSON.parse(text) : {};
+  } catch {
+    const error = new Error(`${cloudSyncProviderLabel()}返回了非 JSON 响应：${response.status}`);
+    error.status = response.status;
+    error.payload = { raw: text.slice(0, 500) };
+    throw error;
+  }
   if (!response.ok || result.ok === false) {
     const error = new Error(result.error || `${cloudSyncProviderLabel()}同步失败：${response.status}`);
     error.status = response.status;
@@ -1167,18 +1176,6 @@ async function callCloudData(action, payload = {}, token = appSessionPassword) {
     throw error;
   }
   return result;
-}
-async function verifyVercelPassword(candidate) {
-  const response = await fetch(defaultCloudApiUrl("/api/app-auth"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password: candidate })
-  });
-  const text = await response.text();
-  const result = text ? JSON.parse(text) : {};
-  if (response.ok && result.ok) return { ok: true, source: "vercel-env" };
-  if (response.status !== 404) return { ok: false, error: result.error || "密码不正确" };
-  return { ok: false, error: "未检测到 Vercel 登录接口" };
 }
 async function verifyAppPassword(password) {
   const candidate = String(password || "").trim();
@@ -1192,35 +1189,30 @@ async function verifyAppPassword(password) {
   try {
     const response = await fetch(cloudApiUrl("/api/app-auth"), {
       method: "POST",
+      cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ password: candidate })
     });
     const text = await response.text();
-    const result = text ? JSON.parse(text) : {};
+    let result = {};
+    try {
+      result = text ? JSON.parse(text) : {};
+    } catch {
+      const message = `${cloudSyncProviderLabel()}登录接口返回了非 JSON 响应：${response.status}`;
+      if (cloudSyncEndpoint) setCloudDbStatus(message);
+      return { ok: false, error: message };
+    }
     if (response.ok && result.ok) return { ok: true, source: cloudSyncEndpoint ? "worker-env" : "vercel-env" };
     if (response.status !== 404) {
-      if (cloudSyncEndpoint && window.location.protocol !== "file:") {
-        const fallback = await verifyVercelPassword(candidate).catch(() => null);
-        if (fallback?.ok) {
-          cloudSyncEndpoint = "";
-          cloudDbLastSeenSha = "";
-          setCloudDbStatus("Worker 登录失败，已临时切回 Vercel");
-          syncCloudEndpointInputs();
-          return { ok: true, source: "vercel-fallback" };
-        }
-      }
-      return { ok: false, error: result.error || "密码不正确" };
+      const message = result.error || (cloudSyncEndpoint ? `Cloudflare Worker 登录失败：${response.status}` : "密码不正确");
+      if (cloudSyncEndpoint) setCloudDbStatus(message);
+      return { ok: false, error: message };
     }
-  } catch {
-    if (cloudSyncEndpoint && window.location.protocol !== "file:") {
-      const fallback = await verifyVercelPassword(candidate).catch(() => null);
-      if (fallback?.ok) {
-        cloudSyncEndpoint = "";
-        cloudDbLastSeenSha = "";
-        setCloudDbStatus("Worker 不可用，已临时切回 Vercel");
-        syncCloudEndpointInputs();
-        return { ok: true, source: "vercel-fallback" };
-      }
+  } catch (error) {
+    if (cloudSyncEndpoint) {
+      const message = `Cloudflare Worker 不可用：${error.message || "网络连接失败"}`;
+      setCloudDbStatus(message);
+      return { ok: false, error: message };
     }
     // Older deployments may not have the standalone auth endpoint yet; cloud data auth is the fallback.
   }
@@ -4248,7 +4240,7 @@ function updateCloudSyncEndpointFromAdmin(clear = false) {
   cloudDbLastSeenSha = "";
   cloudDbQuotaPausedUntil = 0;
   refreshCloudDatabaseStatus(true);
-  showDialog(clear ? "备用云地址已清空" : "备用云地址已保存", clear ? (cloudSyncEndpoint ? `已清空本机手动地址，当前使用 Vercel 下发地址：${cloudSyncEndpoint}` : "当前云同步会回到 Vercel 默认接口。") : `当前云同步会优先连接：${cloudSyncEndpoint}`, "");
+  showDialog(clear ? "备用云地址已清空" : "备用云地址已保存", clear ? (cloudSyncEndpoint ? `已清空本机手动地址，当前使用 Vercel 环境变量下发的 Worker 地址：${cloudSyncEndpoint}` : "当前没有 Worker 地址，云同步会回到 Vercel 默认接口。") : `当前云同步会优先连接：${cloudSyncEndpoint}`, "");
 }
 async function chooseSharedFile() {
   if (desktopApp?.isDesktop) {
