@@ -140,6 +140,16 @@ function sanitizeCheckins(checkins = {}) {
   return result;
 }
 
+function normalizeRecordItems(items = {}) {
+  const normalized = {};
+  Object.entries(items && typeof items === "object" ? items : {}).forEach(([name, amount]) => {
+    const key = String(name || "").trim();
+    if (!key) return;
+    normalized[key] = Number(amount || 0);
+  });
+  return normalized;
+}
+
 function normalizeRecordMap(records = {}, rules = defaultData.rules) {
   const normalized = {};
   Object.entries(records || {}).forEach(([key, record]) => {
@@ -147,9 +157,9 @@ function normalizeRecordMap(records = {}, rules = defaultData.rules) {
     const date = String(record.date || String(key).split("|")[0] || "").trim();
     const member = String(record.member || String(key).split("|").slice(1).join("|") || "").trim();
     if (!date || !member) return;
-    const items = {};
+    const items = normalizeRecordItems(record.items || {});
     Object.keys(rules || {}).forEach((name) => {
-      items[name] = Number(record.items?.[name] || 0);
+      if (!Object.prototype.hasOwnProperty.call(items, name)) items[name] = 0;
     });
     const next = {
       date,
@@ -239,13 +249,23 @@ function newerRecord(remoteRecord, localRecord, prefer = "second", rules = defau
   const local = clone(localRecord);
   const base = newerRecordSide(remote, local, prefer);
   const merged = { ...remote, ...local, ...base, items: {}, checkins: mergeCheckins(remote.checkins, local.checkins) };
-  Object.keys(rules || {}).forEach((name) => {
-    const chosen = newerRecordSide(
-      { value: remote.items?.[name], updated_at: remote.updated_at },
-      { value: local.items?.[name], updated_at: local.updated_at },
-      prefer
-    );
-    merged.items[name] = Number(chosen?.value || 0);
+  const itemNames = new Set([
+    ...Object.keys(remote.items || {}),
+    ...Object.keys(local.items || {}),
+    ...Object.keys(rules || {})
+  ]);
+  itemNames.forEach((name) => {
+    const remoteValue = Number(remote.items?.[name] || 0);
+    const localValue = Number(local.items?.[name] || 0);
+    let value = 0;
+    if (remoteValue && localValue) {
+      value = newerRecordSide(remote, local, prefer) === "second" ? localValue : remoteValue;
+    } else if (localValue) {
+      value = localValue;
+    } else if (remoteValue) {
+      value = remoteValue;
+    }
+    if (value || Object.prototype.hasOwnProperty.call(rules || {}, name)) merged.items[name] = value;
   });
   merged.reason = newerText(remote.reason, local.reason, prefer);
   merged.harvest = newerText(remote.harvest, local.harvest, prefer);

@@ -2696,22 +2696,67 @@ function moveMember(name, direction) {
   render();
   scheduleSave("admin");
 }
+function renameItemInList(list = [], oldName, newName) {
+  const renamed = (Array.isArray(list) ? list : []).map((item) => item === oldName ? newName : item);
+  return Array.from(new Set(renamed.filter(Boolean)));
+}
+function moveItemAmount(items = {}, oldName, newName) {
+  if (!items || oldName === newName || !Object.prototype.hasOwnProperty.call(items, oldName)) return false;
+  const oldValue = Number(items[oldName] || 0);
+  const newValue = Number(items[newName] || 0);
+  if (oldValue || newValue) items[newName] = oldValue + newValue;
+  else if (!Object.prototype.hasOwnProperty.call(items, newName)) items[newName] = items[oldName];
+  delete items[oldName];
+  return true;
+}
+function recalculateRecordTotals(record, rules = data.rules) {
+  const totals = mergedEntryTotals(record.items || {}, rules || {});
+  record.raw_total = totals.raw;
+  record.weighted_total = totals.weighted;
+  record.updated_at = new Date().toISOString();
+}
+function migrateRuleDataKeys(oldName, newName) {
+  if (!oldName || !newName || oldName === newName) return 0;
+  let changed = 0;
+  Object.values(data.records || {}).forEach((record) => {
+    if (moveItemAmount(record.items || {}, oldName, newName)) {
+      recalculateRecordTotals(record, data.rules);
+      changed += 1;
+    }
+  });
+  Object.values(data.monthlyPlans || {}).forEach((entry) => {
+    Object.values(entry?.members || {}).forEach((plan) => {
+      if (moveItemAmount(plan.items || {}, oldName, newName)) changed += 1;
+    });
+  });
+  return changed;
+}
 function renameRule(oldName, newName, weight, videoProduct, aiProduct) {
-  if (!newName) return renderRules();
-  const previousProduct = data.productRules?.[oldName] || defaultProductRuleFor(newName);
-  delete data.rules[oldName];
-  delete data.productRules?.[oldName];
-  data.rules[newName] = Number.isFinite(weight) ? weight : 1;
-  data.productRules[newName] = {
+  const nextName = String(newName || "").trim();
+  if (!nextName) return renderRules();
+  if (!data.productRules || typeof data.productRules !== "object") data.productRules = {};
+  const previousWeight = Number(data.rules?.[oldName] ?? data.rules?.[nextName] ?? 1);
+  const previousProduct = data.productRules?.[oldName] || data.productRules?.[nextName] || defaultProductRuleFor(nextName);
+  const isRename = oldName !== nextName;
+  if (isRename) createBackup(`rename item ${oldName} before`);
+  if (isRename) {
+    delete data.rules[oldName];
+    delete data.productRules?.[oldName];
+  }
+  data.rules[nextName] = Number.isFinite(weight) ? weight : previousWeight;
+  data.productRules[nextName] = {
     video: Number.isFinite(videoProduct) ? videoProduct : Number(previousProduct.video || 0),
     ai: Number.isFinite(aiProduct) ? aiProduct : Number(previousProduct.ai || 0)
   };
-  Object.keys(data.memberItems || {}).forEach((member) => {
-    data.memberItems[member] = (data.memberItems[member] || []).map((item) => item === oldName ? newName : item);
-  });
-  Object.keys(data.groupItems || {}).forEach((group) => {
-    data.groupItems[group] = (data.groupItems[group] || []).map((item) => item === oldName ? newName : item);
-  });
+  if (isRename) {
+    Object.keys(data.memberItems || {}).forEach((member) => {
+      data.memberItems[member] = renameItemInList(data.memberItems[member] || [], oldName, nextName);
+    });
+    Object.keys(data.groupItems || {}).forEach((group) => {
+      data.groupItems[group] = renameItemInList(data.groupItems[group] || [], oldName, nextName);
+    });
+    migrateRuleDataKeys(oldName, nextName);
+  }
   renderRules();
   renderEntryInputs(filterItemsByRules(readEntryInputs()));
   preview();
