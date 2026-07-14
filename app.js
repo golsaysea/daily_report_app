@@ -29,6 +29,7 @@ const defaultData = {
   sheetBackupBaseName: "daily_report",
   backupCleanupEnabled: false,
   autoAudit: false,
+  hiddenMembers: {},
   deletedMembers: {},
   reviewMessages: {
     pass: ["恭喜达标", "今天很稳", "继续保持", "漂亮完成", "节奏很好", "进步明显", "状态在线", "效率不错", "超额很棒", "明天继续"],
@@ -393,6 +394,24 @@ function normalizeRecordMap(records = {}, rules = defaultData.rules) {
   });
   return normalized;
 }
+function addRecordItemsToRules(records = {}, rules = {}, memberGroups = {}, groups = [], groupItems = {}) {
+  const discovered = [];
+  Object.values(records || {}).forEach((record) => {
+    Object.keys(record?.items || {}).forEach((rawName) => {
+      const name = String(rawName || "").trim();
+      if (!name) return;
+      const existed = rules[name] !== undefined;
+      if (!existed) {
+        rules[name] = Number(defaultData.rules?.[name] ?? 1);
+        discovered.push({ name, group: memberGroups?.[record.member] || groups[0] || "" });
+      }
+    });
+  });
+  discovered.forEach(({ name, group }) => {
+    if (!group || !Array.isArray(groupItems[group]) || groupItems[group].includes(name)) return;
+    groupItems[group].push(name);
+  });
+}
 function normalize(source) {
   const loaded = source || {};
   const members = Array.isArray(loaded.members) && loaded.members.length ? loaded.members.map(String) : ["成员A"];
@@ -403,7 +422,9 @@ function normalize(source) {
   members.forEach((name) => {
     if (!memberGroups[name]) memberGroups[name] = groups[0];
   });
-  const rules = loaded.rules && typeof loaded.rules === "object" ? loaded.rules : clone(defaultData.rules);
+  const rules = loaded.rules && typeof loaded.rules === "object" ? clone(loaded.rules) : clone(defaultData.rules);
+  const records = normalizeRecordMap(loaded.records || {}, rules);
+  addRecordItemsToRules(records, rules, memberGroups, groups, groupItems);
   const productRules = normalizeProductRules(rules, loaded.productRules || defaultData.productRules);
   groups.forEach((group) => {
     if (!Array.isArray(groupItems[group])) groupItems[group] = Object.keys(rules);
@@ -414,6 +435,10 @@ function normalize(source) {
   const freeTable = normalizeFreeTable(loaded.freeTable || defaultData.freeTable);
   const fbSpecialties = normalizeFbSpecialties(loaded.fbSpecialties || []);
   const checkinOptions = normalizeCheckinOptions([...(Array.isArray(loaded.checkinOptions) ? loaded.checkinOptions : []), ...defaultData.checkinOptions]);
+  const hiddenMembers = loaded.hiddenMembers && typeof loaded.hiddenMembers === "object" ? clone(loaded.hiddenMembers) : {};
+  Object.entries(loaded.deletedMembers || {}).forEach(([member, value]) => {
+    if (!members.includes(member) && !hiddenMembers[member]) hiddenMembers[member] = value || true;
+  });
   return {
     ...clone(defaultData),
     ...loaded,
@@ -443,12 +468,13 @@ function normalize(source) {
     sheetBackupBaseName: String(loaded.sheetBackupBaseName || defaultData.sheetBackupBaseName),
     backupCleanupEnabled: loaded.backupCleanupEnabled === true,
     autoAudit: loaded.autoAudit === true,
+    hiddenMembers,
     deletedMembers: loaded.deletedMembers && typeof loaded.deletedMembers === "object" ? clone(loaded.deletedMembers) : {},
     reviewMessages: {
       pass: Array.isArray(loaded.reviewMessages?.pass) ? loaded.reviewMessages.pass : clone(defaultData.reviewMessages.pass),
       fail: Array.isArray(loaded.reviewMessages?.fail) ? loaded.reviewMessages.fail : clone(defaultData.reviewMessages.fail)
     },
-    records: normalizeRecordMap(loaded.records || {}, rules)
+    records
   };
 }
 function loadLocal() {
@@ -633,6 +659,38 @@ function clearActiveDeletedMembers(report) {
   });
   return deleted;
 }
+function hiddenMemberMap(report = data) {
+  const hidden = { ...(report.hiddenMembers || {}) };
+  Object.entries(clearActiveDeletedMembers(report) || {}).forEach(([member, value]) => {
+    if (!hidden[member]) hidden[member] = value || true;
+  });
+  return hidden;
+}
+function isMemberHidden(member, report = data) {
+  return Boolean(member && hiddenMemberMap(report)[member]);
+}
+function hiddenMemberEntries(report = data) {
+  const hidden = hiddenMemberMap(report);
+  return Object.keys(hidden).filter(Boolean).sort((a, b) => {
+    const ai = (report.members || []).indexOf(a);
+    const bi = (report.members || []).indexOf(b);
+    if (ai >= 0 && bi >= 0) return ai - bi;
+    if (ai >= 0) return -1;
+    if (bi >= 0) return 1;
+    return String(a).localeCompare(String(b), "zh-CN");
+  }).map((member) => ({ member, hiddenAt: hidden[member] }));
+}
+function visibleConfiguredMembers(report = data) {
+  const hidden = hiddenMemberMap(report);
+  return (report.members || []).filter((member) => member && !hidden[member]);
+}
+function firstVisibleMember(report = data) {
+  return visibleConfiguredMembers(report)[0] || (report.members || [])[0] || "成员A";
+}
+function ensureCurrentMemberVisible() {
+  const visible = visibleConfiguredMembers(data);
+  if (!visible.includes(currentMember)) currentMember = visible[0] || data.members[0] || currentMember || "成员A";
+}
 function mergeCloudData(remoteSource, localSource, mode = "records") {
   if (!remoteSource) return normalize(localSource);
   const remote = normalize(remoteSource);
@@ -659,6 +717,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.sheetBackupBaseName = safeBackupBaseName(local.sheetBackupBaseName || defaultData.sheetBackupBaseName);
     merged.backupCleanupEnabled = local.backupCleanupEnabled === true;
     merged.autoAudit = local.autoAudit === true;
+    merged.hiddenMembers = clone(local.hiddenMembers || {});
     merged.deletedMembers = clone(local.deletedMembers || {});
     merged.reviewMessages = clone(local.reviewMessages || defaultData.reviewMessages);
   } else {
@@ -681,6 +740,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.sheetBackupBaseName = safeBackupBaseName(remote.sheetBackupBaseName || local.sheetBackupBaseName || defaultData.sheetBackupBaseName);
     merged.backupCleanupEnabled = remote.backupCleanupEnabled === true;
     merged.autoAudit = remote.autoAudit === true;
+    merged.hiddenMembers = { ...(local.hiddenMembers || {}), ...(remote.hiddenMembers || {}) };
     merged.deletedMembers = { ...(local.deletedMembers || {}), ...(remote.deletedMembers || {}) };
     merged.reviewMessages = clone(remote.reviewMessages || local.reviewMessages || defaultData.reviewMessages);
   }
@@ -704,6 +764,7 @@ function mergeSummaryData(baseSource, sourceData) {
     groupItems: { ...base.groupItems, ...source.groupItems },
     memberItems: { ...base.memberItems, ...source.memberItems },
     memberQuotas: { ...base.memberQuotas, ...source.memberQuotas },
+    hiddenMembers: { ...base.hiddenMembers, ...source.hiddenMembers },
     dailyQuotas: mergeDailyQuotas(base.dailyQuotas, source.dailyQuotas, "records"),
     monthlyPlans: mergeMonthlyPlans(base.monthlyPlans, source.monthlyPlans),
     freeTable: mergeFreeTable(base.freeTable, source.freeTable),
@@ -729,6 +790,7 @@ function mergeAdminCenterData(baseSource, sourceData) {
     groupItems: { ...source.groupItems, ...base.groupItems },
     memberItems: { ...source.memberItems, ...base.memberItems },
     memberQuotas: { ...source.memberQuotas, ...base.memberQuotas },
+    hiddenMembers: { ...source.hiddenMembers, ...base.hiddenMembers },
     dailyQuotas: mergeDailyQuotas(source.dailyQuotas, base.dailyQuotas, "records"),
     monthlyPlans: mergeMonthlyPlans(source.monthlyPlans, base.monthlyPlans),
     freeTable: mergeFreeTable(source.freeTable, base.freeTable),
@@ -1013,7 +1075,7 @@ async function useCloudDirectory(dir, shouldSave = true) {
   if (text.trim()) data = normalize(JSON.parse(text));
   persistLocal();
   setSyncStatus(`已挂载，后台刷新中 · ${new Date().toLocaleTimeString("zh-CN")}`, cloudLocationLabel);
-  if (!data.members.includes(currentMember)) currentMember = data.members[0];
+  ensureCurrentMemberVisible();
   loadForm();
   render();
   if (!text.trim()) await persistEverywhere();
@@ -1030,7 +1092,7 @@ async function restoreCloudDirectory() {
     lastCloudText = result.text || "";
     cloudLocationLabel = result.path || "";
     setSyncStatus(`已恢复挂载，后台刷新中 · ${new Date().toLocaleTimeString("zh-CN")}`, cloudLocationLabel);
-    if (!data.members.includes(currentMember)) currentMember = data.members[0];
+    ensureCurrentMemberVisible();
     persistLocal();
     loadForm();
     render();
@@ -1344,7 +1406,7 @@ async function pullCloudDatabaseData({ silent = false, token = appSessionPasswor
       if (!silent) createBackup(`${cloudSyncProviderLabel()}刷新前备份`);
       data = mergeCloudData(result.data, data, "records");
       persistLocal();
-      if (!data.members.includes(currentMember)) currentMember = data.members[0] || currentMember;
+      ensureCurrentMemberVisible();
       if (!beforeUnlock) {
         loadForm();
         render();
@@ -1461,7 +1523,7 @@ async function restoreCloudHistory() {
   const result = await callCloudData("restore_history", { eventId });
   data = normalize(result.data);
   persistLocal();
-  if (!data.members.includes(currentMember)) currentMember = data.members[0] || currentMember;
+  ensureCurrentMemberVisible();
   loadForm();
   render();
   await refreshCloudHistory(true);
@@ -1564,7 +1626,7 @@ async function restoreFromCloudDatabase() {
   const result = await callCloudBackup("restore", { backupId: selectedCloudBackupId() });
   createBackup("云数据库恢复前备份");
   data = normalize(result.data);
-  currentMember = data.members[0] || currentMember;
+  currentMember = firstVisibleMember(data);
   persistLocal();
   const writeResult = await persistEverywhere("admin");
   loadForm();
@@ -1676,13 +1738,13 @@ function groupMembers(group) {
   return reportMembers(report).filter((member) => (report.memberGroups?.[member] || report.groups[0]) === group);
 }
 function reportMembers(report = reportData()) {
-  const members = new Set(report.members || []);
-  const deletedMembers = clearActiveDeletedMembers(report);
+  const members = new Set((report.members || []).filter((member) => !isMemberHidden(member, report)));
+  const hidden = hiddenMemberMap(report);
   Object.values(report.records || {}).forEach((record) => {
-    if (deletedMembers?.[record?.member]) return;
-    if (record?.member) members.add(record.member);
+    if (!record?.member || hidden[record.member]) return;
+    members.add(record.member);
   });
-  Object.keys(deletedMembers || {}).forEach((member) => members.delete(member));
+  Object.keys(hidden || {}).forEach((member) => members.delete(member));
   return Array.from(members).sort((a, b) => {
     const ai = (report.members || []).indexOf(a);
     const bi = (report.members || []).indexOf(b);
@@ -2086,11 +2148,33 @@ function renderMiniBars(containerId, rows, valueKey = "weighted") {
 function configuredItems() {
   return Object.keys(reportData().rules);
 }
+function orderedItemNames(names, report = reportData()) {
+  const selected = new Set(Array.from(names || []).filter(Boolean));
+  const configured = Object.keys(report.rules || {});
+  return [
+    ...configured.filter((name) => selected.has(name)),
+    ...Array.from(selected).filter((name) => !configured.includes(name)).sort((a, b) => String(a).localeCompare(String(b), "zh-CN"))
+  ];
+}
+function recordItemNamesForGroup(group, report = reportData()) {
+  const names = new Set();
+  const memberSet = group && group !== "__all__" ? new Set(membersForGroupValue(group, report)) : null;
+  const hidden = hiddenMemberMap(report);
+  Object.values(report.records || {}).forEach((record) => {
+    if (!record?.member || hidden[record.member]) return;
+    if (memberSet && !memberSet.has(record.member)) return;
+    Object.entries(record.items || {}).forEach(([name, amount]) => {
+      if (String(name || "").trim() && Number(amount || 0) !== 0) names.add(name);
+    });
+  });
+  return names;
+}
 function groupVisibleItems(group, report = reportData()) {
   const all = Object.keys(report.rules || {});
-  if (!group || group === "__all__") return all;
-  const selected = Array.isArray(report.groupItems?.[group]) ? report.groupItems[group] : all;
-  return all.filter((name) => selected.includes(name));
+  const selected = (!group || group === "__all__")
+    ? all
+    : (Array.isArray(report.groupItems?.[group]) ? report.groupItems[group] : all);
+  return orderedItemNames(new Set([...selected, ...recordItemNamesForGroup(group, report)]), report);
 }
 function totalsForItems(items = {}, itemNames = configuredItems(), report = reportData()) {
   const raw = itemNames.reduce((sum, name) => sum + Number(items[name] || 0), 0);
@@ -2368,6 +2452,7 @@ function preview() {
   }).join("") || `<tr><td colspan="6" class="hint">还没有可统计的报数。</td></tr>`;
 }
 function loadForm() {
+  ensureCurrentMemberVisible();
   const rec = currentRecord();
   $("dateInput").value = currentDate;
   $("quotaInput").value = String(data.quota);
@@ -2560,7 +2645,7 @@ function renderMemberQuotas() {
     $("dateQuotaInput").value = value === undefined || value === null ? "" : value;
     $("dateQuotaInput").placeholder = fmt(data.quota);
   }
-  data.members.forEach((name) => {
+  visibleConfiguredMembers(data).forEach((name) => {
     const row = document.createElement("div");
     row.className = "quota-row";
     const own = data.memberQuotas[name] ?? "";
@@ -2569,7 +2654,7 @@ function renderMemberQuotas() {
       <input value="${escapeAttr(name)}" aria-label="成员">
       <input type="number" step="0.01" min="0" placeholder="${fmt(data.quota)}" value="${own === "" ? "" : Number(own)}" aria-label="成员定额">
       <input type="number" step="0.01" min="0" placeholder="${fmt(memberQuota(name, selectedDay))}" value="${dayOwn === undefined || dayOwn === null ? "" : Number(dayOwn)}" aria-label="当天定额">
-      <button class="icon" title="删除成员">×</button>
+      <button class="icon" title="隐藏成员">隐</button>
     `;
     const inputs = row.querySelectorAll("input");
     inputs[0].onchange = () => renameMember(name, inputs[0].value.trim());
@@ -2589,8 +2674,9 @@ function renderMemberQuotas() {
   });
 }
 function renderMemberGroups() {
-  $("memberGroupBox").innerHTML = data.groups.map((group) => {
-    const members = data.members.filter((name) => (data.memberGroups?.[name] || data.groups[0]) === group);
+  const visibleMembers = visibleConfiguredMembers(data);
+  const groupHtml = data.groups.map((group) => {
+    const members = visibleMembers.filter((name) => (data.memberGroups?.[name] || data.groups[0]) === group);
     return `
       <details class="overview-group" open>
         <summary>
@@ -2608,13 +2694,33 @@ function renderMemberGroups() {
               </select>
               <button class="icon" data-move-up="${escapeAttr(name)}" ${index === 0 ? "disabled" : ""} title="上移">↑</button>
               <button class="icon" data-move-down="${escapeAttr(name)}" ${index === data.members.length - 1 ? "disabled" : ""} title="下移">↓</button>
-              <button class="icon" data-remove-member="${escapeAttr(name)}" title="删除成员">×</button>
+              <button class="icon" data-remove-member="${escapeAttr(name)}" title="隐藏成员">隐</button>
             </div>
           `;
         }).join("") || `<div class="hint">这个分组还没有成员。</div>`}
       </details>
     `;
   }).join("");
+  const hidden = hiddenMemberEntries(data);
+  const hiddenHtml = hidden.length ? `
+      <details class="overview-group hidden-members-group" open>
+        <summary><span>隐藏成员 · ${hidden.length}</span><span class="hint">不参与侧边栏、整体预览和混合表格</span></summary>
+        ${hidden.map(({ member, hiddenAt }) => {
+          const group = data.memberGroups?.[member] || "未分组";
+          const date = hiddenAt && hiddenAt !== true ? String(hiddenAt).slice(0, 10) : "已隐藏";
+          return `
+            <div class="member-group-row">
+              <input value="${escapeAttr(member)}" aria-label="隐藏成员" disabled>
+              <span class="hint">${escapeHtml(group)} · ${escapeHtml(date)}</span>
+              <span></span>
+              <span></span>
+              <button class="icon" data-restore-member="${escapeAttr(member)}" title="恢复成员">显</button>
+            </div>
+          `;
+        }).join("")}
+      </details>
+    ` : "";
+  $("memberGroupBox").innerHTML = groupHtml + hiddenHtml;
   $("memberGroupBox").querySelectorAll("input[data-group-name]").forEach((input) => {
     input.onchange = () => renameGroup(input.dataset.groupName, input.value.trim());
   });
@@ -2641,6 +2747,9 @@ function renderMemberGroups() {
   });
   $("memberGroupBox").querySelectorAll("button[data-remove-member]").forEach((button) => {
     button.onclick = () => removeMember(button.dataset.removeMember);
+  });
+  $("memberGroupBox").querySelectorAll("button[data-restore-member]").forEach((button) => {
+    button.onclick = () => restoreMember(button.dataset.restoreMember);
   });
 }
 function renderMemberItemConfig() {
@@ -2817,9 +2926,17 @@ function renameMember(oldName, newName) {
   scheduleSave("admin");
 }
 function addMember(name, groupName = data.groups[0] || "1组") {
-  if (!name || data.members.includes(name)) return;
+  if (!name) return;
+  if (isMemberHidden(name, data)) {
+    restoreMember(name, groupName);
+    $("memberName").value = "";
+    $("adminMemberName").value = "";
+    return;
+  }
+  if (data.members.includes(name)) return;
   saveFormSilently();
   delete data.deletedMembers?.[name];
+  delete data.hiddenMembers?.[name];
   data.members.push(name);
   data.memberGroups[name] = groupName;
   data.memberItems[name] = configuredItems();
@@ -2830,19 +2947,28 @@ function addMember(name, groupName = data.groups[0] || "1组") {
   render();
   scheduleSave("admin");
 }
+function restoreMember(name, groupName = "") {
+  if (!name) return;
+  saveFormSilently();
+  data.hiddenMembers = data.hiddenMembers || {};
+  delete data.hiddenMembers[name];
+  delete data.deletedMembers?.[name];
+  if (!data.members.includes(name)) data.members.push(name);
+  if (groupName) data.memberGroups[name] = groupName;
+  else if (!data.memberGroups[name]) data.memberGroups[name] = data.groups[0] || "1组";
+  if (!Array.isArray(data.memberItems[name])) data.memberItems[name] = configuredItems();
+  currentMember = name;
+  loadForm();
+  render();
+  scheduleSave("admin");
+}
 function removeMember(name) {
-  if (data.members.length <= 1) return alert("至少保留一个成员。");
-  if (!confirm(`确定隐藏成员“${name}”？会移出成员列表并保留历史记录，之后重新添加同名成员可恢复显示。`)) return;
-  data.members = data.members.filter((item) => item !== name);
-  data.deletedMembers = data.deletedMembers || {};
-  data.deletedMembers[name] = new Date().toISOString();
-  delete data.memberQuotas[name];
-  delete data.memberGroups[name];
-  delete data.memberItems[name];
-  Object.values(data.dailyQuotas || {}).forEach((entry) => {
-    if (entry.members) delete entry.members[name];
-  });
-  if (currentMember === name) currentMember = data.members[0];
+  if (visibleConfiguredMembers(data).length <= 1) return alert("至少保留一个显示成员。");
+  if (!confirm(`确定隐藏成员“${name}”？会从成员列表、整体预览和混合表格中隐藏，但保留历史记录和配置。`)) return;
+  data.hiddenMembers = data.hiddenMembers || {};
+  data.hiddenMembers[name] = new Date().toISOString();
+  delete data.deletedMembers?.[name];
+  if (currentMember === name) currentMember = firstVisibleMember(data);
   loadForm();
   render();
   scheduleSave("admin");
@@ -3953,7 +4079,7 @@ function renderBackups() {
       if (!item || !confirm("确定恢复这个备份？当前数据会先再备份一次。")) return;
       createBackup("恢复前备份");
       data = normalize(item.data);
-      currentMember = data.members[0];
+      currentMember = firstVisibleMember(data);
       loadForm();
       render();
       persistEverywhere();
@@ -4281,6 +4407,7 @@ function removeSpecialtyReel(id) {
   renderSpecialtyReels(item);
 }
 function render() {
+  ensureCurrentMemberVisible();
   renderDateCalendars();
   renderMembers();
   renderRules();
@@ -4374,7 +4501,7 @@ async function chooseSharedFile() {
     lastCloudText = result.text || "";
     cloudLocationLabel = result.path || "";
     setSyncStatus(`已挂载，后台刷新中 · ${new Date().toLocaleTimeString("zh-CN")}`, cloudLocationLabel);
-    if (!data.members.includes(currentMember)) currentMember = data.members[0];
+    ensureCurrentMemberVisible();
     persistLocal();
     loadForm();
     render();
@@ -4412,7 +4539,7 @@ async function chooseSharedFile() {
   if (text.trim()) data = normalize(JSON.parse(text));
   persistLocal();
   setSyncStatus(`已挂载文件，后台刷新中 · ${new Date().toLocaleTimeString("zh-CN")}`, cloudLocationLabel);
-  if (!data.members.includes(currentMember)) currentMember = data.members[0];
+  ensureCurrentMemberVisible();
   loadForm();
   render();
   if (!text.trim() || createNew) await persistEverywhere();
@@ -4439,7 +4566,7 @@ async function pollSharedFile(showIdle = true) {
     lastFileModified = result.mtime || lastFileModified;
     lastCloudText = result.text || "";
     setSyncStatus(`发现云端更新，已刷新 · ${new Date().toLocaleTimeString("zh-CN")}`, result.path || cloudLocationLabel);
-    if (!data.members.includes(currentMember)) currentMember = data.members[0];
+    ensureCurrentMemberVisible();
     loadForm();
     render();
     return;
@@ -4458,7 +4585,7 @@ async function pollSharedFile(showIdle = true) {
       preserveActiveDraft();
       data = mergeCloudData(JSON.parse(text || "{}"), data, "records");
       persistLocal();
-      if (!data.members.includes(currentMember)) currentMember = data.members[0];
+      ensureCurrentMemberVisible();
       setSyncStatus(`发现云端更新，已刷新 · ${new Date().toLocaleTimeString("zh-CN")}`);
       loadForm();
       render();
@@ -4613,7 +4740,7 @@ async function mergeToAdminCenter() {
   createBackup("管理员中心合并前备份");
   const snapshot = await buildAdminCenterSnapshot();
   data = snapshot.data;
-  if (!data.members.includes(currentMember)) currentMember = data.members[0] || currentMember;
+  ensureCurrentMemberVisible();
   persistLocal();
   loadForm();
   render();
@@ -4791,7 +4918,8 @@ function styledWorkbookXml(sheets, stylesXml) {
 }
 function buildThreeMonthWorkbookXml() {
   const itemNames = configuredItems();
-  const records = recordsInLastMonths(3);
+  const visibleMembers = new Set(reportMembers(data));
+  const records = recordsInLastMonths(3).filter((rec) => visibleMembers.has(rec.member));
   const header = ["日期", "成员", "分组", ...itemNames, "原始", "工作量", "定额", "差额", "视频成品", "AI成品", "状态", "备注"];
   const recordRow = (rec) => {
     const quota = memberQuota(rec.member, rec.date);
@@ -4812,7 +4940,7 @@ function buildThreeMonthWorkbookXml() {
     ];
   };
   const summaryRows = [["成员", "分组", "总工作量", "总定额", "总差额", "视频成品", "AI成品", ...itemNames]];
-  data.members.forEach((member) => {
+  reportMembers(data).forEach((member) => {
     const own = records.filter((rec) => rec.member === member);
     const weighted = own.reduce((sum, rec) => sum + Number(rec.weighted_total || 0), 0);
     const quota = own.reduce((sum, rec) => sum + memberQuota(member, rec.date), 0);
@@ -4836,7 +4964,7 @@ function buildThreeMonthWorkbookXml() {
   const sheets = [
     rowsToWorksheet("总览", summaryRows),
     rowsToWorksheet("全部记录", [header, ...records.map(recordRow)]),
-    ...data.members.map((member) => rowsToWorksheet(member, [header, ...records.filter((rec) => rec.member === member).map(recordRow)]))
+    ...reportMembers(data).map((member) => rowsToWorksheet(member, [header, ...records.filter((rec) => rec.member === member).map(recordRow)]))
   ];
   return `<?xml version="1.0"?>
 <?mso-application progid="Excel.Sheet"?>
@@ -5565,7 +5693,9 @@ function exportMixedTableWorkbook() {
 function buildCsvBackups() {
   const itemNames = configuredItems();
   const rows = [["日期", "成员", ...itemNames, "原始", "工作量", "定额", "差额", "视频成品", "AI成品", "状态", "备注"]];
+  const visibleMembers = new Set(reportMembers(data));
   Object.values(data.records)
+    .filter((rec) => visibleMembers.has(rec.member))
     .sort((a, b) => `${a.date}|${a.member}`.localeCompare(`${b.date}|${b.member}`))
     .forEach((rec) => {
       const quota = memberQuota(rec.member, rec.date);
@@ -5585,7 +5715,7 @@ function buildCsvBackups() {
       ]);
     });
   const summary = [["成员", "总工作量", "总定额", "总差额", "视频成品", "AI成品", ...itemNames]];
-  data.members.forEach((member) => {
+  reportMembers(data).forEach((member) => {
     const records = Object.values(data.records).filter((rec) => rec.member === member);
     const weighted = records.reduce((sum, rec) => sum + Number(rec.weighted_total || 0), 0);
     const quota = records.reduce((sum, rec) => sum + memberQuota(member, rec.date), 0);
@@ -5839,13 +5969,14 @@ function importEnsureItem(target, itemName, stats) {
 function importEnsureMember(target, member, group, stats) {
   const name = importCellText(member);
   if (!name || name === "合计") return "";
+  const hidden = isMemberHidden(name, target);
   const groupName = importCellText(group) || target.memberGroups?.[name] || target.groups?.[0] || "1组";
   if (!target.groups.includes(groupName)) target.groups.push(groupName);
-  if (!target.members.includes(name)) {
+  if (!target.members.includes(name) && !hidden) {
     target.members.push(name);
     stats.members += 1;
   }
-  target.memberGroups[name] = groupName;
+  if (!hidden || !target.memberGroups?.[name]) target.memberGroups[name] = groupName;
   if (!Array.isArray(target.groupItems[groupName])) target.groupItems[groupName] = Object.keys(target.rules || {});
   if (!Array.isArray(target.memberItems[name])) target.memberItems[name] = Object.keys(target.rules || {});
   return name;
@@ -6211,7 +6342,7 @@ async function importData(file) {
       data = result.data;
     }
     persistLocal();
-    if (!data.members.includes(currentMember)) currentMember = data.members[0] || currentMember;
+    ensureCurrentMemberVisible();
     loadForm();
     render();
     showDialog("导入完成", `已恢复到本机数据，共 ${Object.keys(data.records || {}).length} 条记录。确认无误后，可以点击“中心回灌云同步”写回云端。`, "");
