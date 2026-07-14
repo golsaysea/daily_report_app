@@ -5712,33 +5712,99 @@ function importEnsureMember(target, member, group, stats) {
   if (!Array.isArray(target.memberItems[name])) target.memberItems[name] = Object.keys(target.rules || {});
   return name;
 }
+function importedRecordHasContent(items = {}, checkins = {}, note = "") {
+  return Object.values(items || {}).some((value) => Number(value || 0) !== 0)
+    || Object.values(checkins || {}).some(Boolean)
+    || Boolean(importCellText(note));
+}
+function mergeImportedRecord(existing, imported, rules = defaultData.rules) {
+  if (!existing) return { record: imported, changed: true };
+  const merged = clone(existing);
+  merged.items = { ...(merged.items || {}) };
+  merged.checkins = sanitizeCheckins(merged.checkins || {});
+  let changed = false;
+
+  Object.entries(imported.items || {}).forEach(([name, value]) => {
+    const nextValue = Number(value || 0);
+    if (!nextValue) return;
+    const currentValue = Number(merged.items?.[name] || 0);
+    if (!currentValue) {
+      merged.items[name] = nextValue;
+      changed = true;
+    }
+  });
+
+  Object.entries(imported.checkins || {}).forEach(([slot, value]) => {
+    if (!value) return;
+    const current = normalizeMergedCheckin(checkinSlotValue(merged.checkins, slot));
+    if (!current) {
+      merged.checkins[slot] = value;
+      changed = true;
+    }
+  });
+  merged.checkins = sanitizeCheckins(merged.checkins || {});
+
+  const importedNote = importCellText(imported.reason || imported.harvest || imported.diary || "");
+  const existingNote = importCellText(merged.reason || merged.harvest || merged.diary || "");
+  if (importedNote && !existingNote) {
+    merged.reason = importedNote;
+    changed = true;
+  }
+
+  const importedStatus = importCellText(imported.status || "");
+  const existingStatus = importCellText(merged.status || "");
+  if (importedStatus && (!existingStatus || existingStatus === "待审核")) {
+    merged.status = importedStatus;
+    changed = true;
+  }
+
+  if (changed) {
+    const totals = mergedEntryTotals(merged.items || {}, rules || {});
+    merged.raw_total = totals.raw;
+    merged.weighted_total = totals.weighted;
+    merged.updated_at = new Date().toISOString();
+  }
+  return { record: merged, changed };
+}
 function importApplyRecord(target, stats, record) {
   const day = importCellText(record.date);
-  const member = importEnsureMember(target, record.member, record.group, stats);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !member) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
     stats.skipped += 1;
     return;
   }
-  const items = {};
+  const rawItems = {};
   Object.entries(record.items || {}).forEach(([name, amount]) => {
-    const itemName = importEnsureItem(target, name, stats);
-    if (!itemName) return;
     const value = importNumber(amount);
-    if (value) items[itemName] = value;
+    if (value) rawItems[name] = value;
   });
-  const totals = mergedEntryTotals(items, target.rules || {});
   const checkins = {};
   Object.entries(record.checkins || {}).forEach(([slot, value]) => {
     const normalized = importCheckinValue(value, day);
     if (normalized) checkins[slot] = normalized;
   });
   const note = importCellText(record.note || "");
+  if (!importedRecordHasContent(rawItems, checkins, note)) {
+    stats.emptyRows = (stats.emptyRows || 0) + 1;
+    return;
+  }
+
+  const member = importEnsureMember(target, record.member, record.group, stats);
+  if (!member) {
+    stats.skipped += 1;
+    return;
+  }
+  const items = {};
+  Object.entries(rawItems).forEach(([name, value]) => {
+    const itemName = importEnsureItem(target, name, stats);
+    if (itemName) items[itemName] = value;
+  });
+  const totals = mergedEntryTotals(items, target.rules || {});
   const imported = {
     date: day,
     member,
     items,
-    raw_total: record.raw_total === undefined ? totals.raw : importNumber(record.raw_total),
-    weighted_total: record.weighted_total === undefined ? totals.weighted : importNumber(record.weighted_total),
+    raw_total: totals.raw,
+    weighted_total: totals.weighted,
     quota_total: record.quota_total === undefined ? memberQuota(member, day) : importNumber(record.quota_total),
     status: importCellText(record.status || "") || "待审核",
     reason: note,
@@ -5751,7 +5817,12 @@ function importApplyRecord(target, stats, record) {
   const firstSeen = !stats.seenRecordKeys?.has(key);
   if (!stats.seenRecordKeys) stats.seenRecordKeys = new Set();
   stats.seenRecordKeys.add(key);
-  target.records[key] = newerRecord(target.records[key], imported, "second", target.rules || {});
+  const merged = mergeImportedRecord(target.records[key], imported, target.rules || {});
+  if (!merged.changed) {
+    stats.unchanged = (stats.unchanged || 0) + 1;
+    return;
+  }
+  target.records[key] = merged.record;
   markPendingCloudRecord(day, member);
   if (firstSeen) stats.records += 1;
   if (firstSeen) stats.checkins += Object.keys(checkins).length;
@@ -5977,7 +6048,7 @@ async function fileToWorkbookSheets(file) {
 }
 function importWorkbookToData(sheets) {
   const target = normalize(data);
-  const stats = { records: 0, members: 0, items: 0, checkins: 0, skipped: 0, seenRecordKeys: new Set() };
+  const stats = { records: 0, members: 0, items: 0, checkins: 0, skipped: 0, emptyRows: 0, unchanged: 0, seenRecordKeys: new Set() };
   sheets.forEach((sheet) => {
     const rows = (sheet.rows || []).filter((row) => row.some((cell) => importCellText(cell)));
     importRowsFromRecordTable(target, stats, rows);
@@ -5996,7 +6067,7 @@ async function importData(file) {
       const sheets = await fileToWorkbookSheets(file);
       const result = importWorkbookToData(sheets);
       if (!result.stats.records) throw new Error("没有识别到可恢复的每日记录。请在 Google 表格里切到“全部记录”工作表，下载 CSV 后再导入。");
-      const confirmed = confirm(`识别到 ${result.stats.records} 条记录、${result.stats.checkins} 个打卡、${result.stats.members} 个新成员、${result.stats.items} 个新项目。\n\n确定合并导入到当前日记软件吗？导入前会自动备份当前数据。`);
+      const confirmed = confirm(`可补充 ${result.stats.records} 条记录、${result.stats.checkins} 个打卡、${result.stats.members} 个新成员、${result.stats.items} 个新项目。已自动跳过 ${result.stats.emptyRows || 0} 条空白/全0行，保留 ${result.stats.unchanged || 0} 条已有数据。\n\n确定合并导入到当前日记软件吗？导入前会自动备份当前数据。`);
       if (!confirmed) return;
       createBackup("表格恢复导入前备份");
       data = result.data;
