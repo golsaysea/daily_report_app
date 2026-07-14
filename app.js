@@ -1,4 +1,4 @@
-﻿const defaultData = {
+const defaultData = {
   version: 2,
   updated_at: "",
   quota: 3,
@@ -5574,17 +5574,441 @@ async function backupSheets(silent = false) {
     URL.revokeObjectURL(link.href);
   });
 }
-function importData(file) {
-  const reader = new FileReader();
-  reader.onload = () => {
-    createBackup("导入前备份");
-    data = normalize(JSON.parse(String(reader.result || "{}")));
+function parseDelimitedRows(text, delimiter = ",") {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+  const source = String(text || "").replace(/^\ufeff/, "");
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (quoted) {
+      if (char === '"' && source[index + 1] === '"') {
+        cell += '"';
+        index += 1;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        cell += char;
+      }
+    } else if (char === '"') {
+      quoted = true;
+    } else if (char === delimiter) {
+      row.push(cell);
+      cell = "";
+    } else if (char === "\n") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else if (char !== "\r") {
+      cell += char;
+    }
+  }
+  row.push(cell);
+  if (row.some((value) => String(value || "").trim())) rows.push(row);
+  return rows;
+}
+function parseCsvRows(text) {
+  const firstLine = String(text || "").split(/\r?\n/).find((line) => line.trim()) || "";
+  const delimiter = (firstLine.match(/\t/g) || []).length > (firstLine.match(/,/g) || []).length ? "\t" : ",";
+  return parseDelimitedRows(text, delimiter);
+}
+function importHeaderKey(value) {
+  return String(value || "").replace(/^\ufeff/, "").replace(/[\s\n\r：:]/g, "").trim();
+}
+function importCellText(value) {
+  return String(value ?? "").replace(/^\ufeff/, "").replace(/\u00a0/g, " ").trim();
+}
+function importNumber(value) {
+  const text = importCellText(value).replace(/,/g, "").replace(/%$/, "");
+  if (!text || /^[-–—]$/.test(text)) return 0;
+  const number = Number(text);
+  return Number.isFinite(number) ? number : 0;
+}
+function normalizeImportedDateKey(value) {
+  const text = importCellText(value).replace(/[./]/g, "-");
+  const match = text.match(/(20\d{2}|19\d{2})-(\d{1,2})-(\d{1,2})/);
+  if (!match) return "";
+  return `${match[1]}-${String(Number(match[2])).padStart(2, "0")}-${String(Number(match[3])).padStart(2, "0")}`;
+}
+function importRangeFromText(value) {
+  const text = importCellText(value).replace(/[./]/g, "-");
+  const dates = Array.from(text.matchAll(/(20\d{2}|19\d{2})-(\d{1,2})-(\d{1,2})/g)).map((match) => normalizeImportedDateKey(match[0]));
+  return dates.length >= 2 ? { start: dates[0], end: dates[1] } : null;
+}
+function importDateFromMonthDay(value, range = null) {
+  const text = importCellText(value).replace(/[./]/g, "-");
+  const full = normalizeImportedDateKey(text);
+  if (full) return full;
+  const match = text.match(/^(\d{1,2})-(\d{1,2})$/);
+  if (!match) return "";
+  const month = String(Number(match[1])).padStart(2, "0");
+  const day = String(Number(match[2])).padStart(2, "0");
+  const years = Array.from(new Set([
+    range?.start?.slice(0, 4),
+    range?.end?.slice(0, 4),
+    currentDate.slice(0, 4)
+  ].filter(Boolean)));
+  for (const year of years) {
+    const candidate = `${year}-${month}-${day}`;
+    if (!range || (candidate >= range.start && candidate <= range.end)) return candidate;
+  }
+  return `${years[0] || currentDate.slice(0, 4)}-${month}-${day}`;
+}
+function importCheckinValue(value, day) {
+  const text = importCellText(value);
+  if (!text || /未打卡/.test(text)) return null;
+  const time = text.match(/\b\d{1,2}:\d{2}(?::\d{2})?\b/)?.[0] || "";
+  const status = text.split(/\s+/).find((part) => part && !/^\d{1,2}:\d{2}/.test(part)) || text.replace(time, "").trim();
+  if (!status) return null;
+  const hhmm = time ? time.slice(0, 5) : "";
+  return {
+    status: normalizeCheckinStatus(status),
+    time: hhmm,
+    iso: hhmm ? `${day}T${hhmm}:00` : "",
+    updated_at: hhmm ? `${day}T${hhmm}:00` : ""
+  };
+}
+function importIsMetadataHeader(label) {
+  const key = importHeaderKey(label);
+  if (!key) return true;
+  if (/打卡$/.test(key)) return true;
+  return new Set([
+    "日期", "成员", "姓名", "分组", "原始", "换算", "完成", "完成数", "完成总数", "总完成", "工作量",
+    "定额", "默认定额", "当日定额", "差额", "视频成品", "AI成品", "状态", "备注",
+    "全组完成", "全组定额", "全组差额"
+  ]).has(key);
+}
+function importEnsureItem(target, itemName, stats) {
+  const name = importCellText(itemName);
+  if (!name || importIsMetadataHeader(name)) return "";
+  if (target.rules[name] === undefined) {
+    target.rules[name] = data.rules?.[name] ?? 1;
+    target.productRules[name] = data.productRules?.[name] || defaultProductRuleFor(name);
+    stats.items += 1;
+  }
+  Object.keys(target.groupItems || {}).forEach((group) => {
+    if (!Array.isArray(target.groupItems[group])) target.groupItems[group] = Object.keys(target.rules);
+    if (!target.groupItems[group].includes(name)) target.groupItems[group].push(name);
+  });
+  Object.keys(target.memberItems || {}).forEach((member) => {
+    if (!Array.isArray(target.memberItems[member])) target.memberItems[member] = Object.keys(target.rules);
+    if (!target.memberItems[member].includes(name)) target.memberItems[member].push(name);
+  });
+  return name;
+}
+function importEnsureMember(target, member, group, stats) {
+  const name = importCellText(member);
+  if (!name || name === "合计") return "";
+  const groupName = importCellText(group) || target.memberGroups?.[name] || target.groups?.[0] || "1组";
+  if (!target.groups.includes(groupName)) target.groups.push(groupName);
+  if (!target.members.includes(name)) {
+    target.members.push(name);
+    stats.members += 1;
+  }
+  target.memberGroups[name] = groupName;
+  if (!Array.isArray(target.groupItems[groupName])) target.groupItems[groupName] = Object.keys(target.rules || {});
+  if (!Array.isArray(target.memberItems[name])) target.memberItems[name] = Object.keys(target.rules || {});
+  return name;
+}
+function importApplyRecord(target, stats, record) {
+  const day = importCellText(record.date);
+  const member = importEnsureMember(target, record.member, record.group, stats);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !member) {
+    stats.skipped += 1;
+    return;
+  }
+  const items = {};
+  Object.entries(record.items || {}).forEach(([name, amount]) => {
+    const itemName = importEnsureItem(target, name, stats);
+    if (!itemName) return;
+    const value = importNumber(amount);
+    if (value) items[itemName] = value;
+  });
+  const totals = mergedEntryTotals(items, target.rules || {});
+  const checkins = {};
+  Object.entries(record.checkins || {}).forEach(([slot, value]) => {
+    const normalized = importCheckinValue(value, day);
+    if (normalized) checkins[slot] = normalized;
+  });
+  const note = importCellText(record.note || "");
+  const imported = {
+    date: day,
+    member,
+    items,
+    raw_total: record.raw_total === undefined ? totals.raw : importNumber(record.raw_total),
+    weighted_total: record.weighted_total === undefined ? totals.weighted : importNumber(record.weighted_total),
+    quota_total: record.quota_total === undefined ? memberQuota(member, day) : importNumber(record.quota_total),
+    status: importCellText(record.status || "") || "待审核",
+    reason: note,
+    harvest: "",
+    diary: "",
+    checkins: sanitizeCheckins(checkins),
+    updated_at: new Date().toISOString()
+  };
+  const key = `${day}|${member}`;
+  const firstSeen = !stats.seenRecordKeys?.has(key);
+  if (!stats.seenRecordKeys) stats.seenRecordKeys = new Set();
+  stats.seenRecordKeys.add(key);
+  target.records[key] = newerRecord(target.records[key], imported, "second", target.rules || {});
+  markPendingCloudRecord(day, member);
+  if (firstSeen) stats.records += 1;
+  if (firstSeen) stats.checkins += Object.keys(checkins).length;
+}
+function importHeaderMap(row) {
+  const map = {};
+  row.forEach((cell, index) => {
+    const key = importHeaderKey(cell);
+    if (key && map[key] === undefined) map[key] = index;
+  });
+  return map;
+}
+function importRowsFromRecordTable(target, stats, rows, range = null) {
+  let imported = 0;
+  rows.forEach((row, rowIndex) => {
+    const map = importHeaderMap(row);
+    if (map["日期"] === undefined || (map["成员"] === undefined && map["姓名"] === undefined)) return;
+    const memberIndex = map["成员"] ?? map["姓名"];
+    const itemColumns = row
+      .map((label, index) => ({ label: importCellText(label), index }))
+      .filter(({ label }) => label && !importIsMetadataHeader(label));
+    for (let index = rowIndex + 1; index < rows.length; index += 1) {
+      const source = rows[index] || [];
+      const date = importDateFromMonthDay(source[map["日期"]], range);
+      const member = importCellText(source[memberIndex]);
+      if (!date || !member || member === "合计") continue;
+      const items = {};
+      itemColumns.forEach(({ label, index: cellIndex }) => {
+        items[label] = source[cellIndex];
+      });
+      importApplyRecord(target, stats, {
+        date,
+        member,
+        group: source[map["分组"]],
+        items,
+        raw_total: source[map["原始"]],
+        weighted_total: source[map["工作量"] ?? map["完成"] ?? map["完成总数"]],
+        quota_total: source[map["定额"]],
+        status: source[map["状态"]],
+        note: source[map["备注"]],
+        checkins: {
+          morning: source[map["上午打卡"] ?? map["上午"]],
+          noon: source[map["下午打卡"] ?? map["中午打卡"] ?? map["中午"] ?? map["下午"]],
+          evening: source[map["晚上打卡"] ?? map["晚打卡"] ?? map["晚上"]]
+        }
+      });
+      imported += 1;
+    }
+  });
+  return imported;
+}
+function importMixedDetailRows(target, stats, rows) {
+  let range = null;
+  let imported = 0;
+  rows.forEach((row, rowIndex) => {
+    const rowText = row.map(importCellText).join(" ");
+    const nextRange = importRangeFromText(rowText);
+    if (nextRange) range = nextRange;
+    row.forEach((cell, startIndex) => {
+      const title = importCellText(cell);
+      if (!/^\d+\s+.+/.test(title)) return;
+      const segment = row.slice(startIndex, startIndex + 60).map(importCellText);
+      const workOffset = segment.findIndex((label) => importHeaderKey(label) === "工作量");
+      const rawOffset = segment.findIndex((label) => importHeaderKey(label) === "原始");
+      if (workOffset < 0 && rawOffset < 0) return;
+      const member = title.replace(/^\d+\s+/, "").trim();
+      const endIndex = row.findIndex((value, index) => index > startIndex && /^\d+\s+.+/.test(importCellText(value)));
+      const blockEnd = endIndex > startIndex ? endIndex : Math.min(row.length, startIndex + segment.length);
+      const headerCells = row.slice(startIndex, blockEnd).map(importCellText);
+      const metaAt = (key) => headerCells.findIndex((label) => importHeaderKey(label) === key);
+      const valueAt = (nextRow, key) => {
+        const offset = metaAt(key);
+        return offset >= 0 ? nextRow[startIndex + offset] : "";
+      };
+      const itemColumns = headerCells
+        .map((label, offset) => ({ label, offset }))
+        .filter(({ label, offset }) => offset > 0 && label && !importIsMetadataHeader(label));
+      for (let nextRowIndex = rowIndex + 1; nextRowIndex < rows.length; nextRowIndex += 1) {
+        const nextRow = rows[nextRowIndex] || [];
+        const date = importDateFromMonthDay(nextRow[startIndex], range);
+        if (!date) continue;
+        const items = {};
+        itemColumns.forEach(({ label, offset }) => {
+          items[label] = nextRow[startIndex + offset];
+        });
+        importApplyRecord(target, stats, {
+          date,
+          member,
+          items,
+          raw_total: valueAt(nextRow, "原始"),
+          weighted_total: valueAt(nextRow, "工作量"),
+          quota_total: valueAt(nextRow, "定额"),
+          status: valueAt(nextRow, "状态"),
+          note: valueAt(nextRow, "备注"),
+          checkins: {
+            morning: valueAt(nextRow, "上午打卡"),
+            noon: valueAt(nextRow, "下午打卡"),
+            evening: valueAt(nextRow, "晚上打卡")
+          }
+        });
+        imported += 1;
+      }
+    });
+  });
+  return imported;
+}
+function textWorkbookSheets(text, fileName = "") {
+  const source = String(text || "");
+  if (/<table[\s>]/i.test(source) && !/<Workbook[\s>]/i.test(source)) {
+    const doc = new DOMParser().parseFromString(source, "text/html");
+    return Array.from(doc.querySelectorAll("table")).map((table, index) => ({
+      name: `表格${index + 1}`,
+      rows: Array.from(table.querySelectorAll("tr")).map((tr) => Array.from(tr.children).map((cell) => cell.textContent || ""))
+    }));
+  }
+  if (/<Workbook[\s>]/i.test(source) || /<Worksheet[\s>]/i.test(source)) {
+    const doc = new DOMParser().parseFromString(source, "application/xml");
+    return Array.from(doc.getElementsByTagNameNS("*", "Worksheet")).map((sheet, index) => ({
+      name: sheet.getAttribute("ss:Name") || sheet.getAttribute("Name") || `工作表${index + 1}`,
+      rows: Array.from(sheet.getElementsByTagNameNS("*", "Row")).map((row) => {
+        const values = [];
+        let column = 0;
+        Array.from(row.getElementsByTagNameNS("*", "Cell")).forEach((cell) => {
+          const explicit = Number(cell.getAttribute("ss:Index") || cell.getAttribute("Index") || 0);
+          if (explicit > 0) column = explicit - 1;
+          const dataNode = cell.getElementsByTagNameNS("*", "Data")[0];
+          values[column] = dataNode?.textContent || "";
+          column += 1;
+        });
+        return values;
+      })
+    }));
+  }
+  return [{ name: fileName || "CSV", rows: parseCsvRows(source) }];
+}
+function zipValue(bytes, offset, size) {
+  let value = 0;
+  for (let index = 0; index < size; index += 1) value += bytes[offset + index] << (index * 8);
+  return value >>> 0;
+}
+async function unzipEntryBytes(bytes, method, start, size) {
+  const chunk = bytes.slice(start, start + size);
+  if (method === 0) return chunk;
+  if (method !== 8 || typeof DecompressionStream !== "function") throw new Error("这个 .xlsx 使用了压缩格式，当前浏览器不能直接解析；请从 Google 表格下载当前工作表 CSV 后导入。");
+  for (const format of ["deflate-raw", "deflate"]) {
+    try {
+      const stream = new Blob([chunk]).stream().pipeThrough(new DecompressionStream(format));
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    } catch {}
+  }
+  throw new Error("无法解压这个 .xlsx；请从 Google 表格下载 CSV 后导入。");
+}
+async function unzipXlsxEntries(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let endOffset = -1;
+  for (let index = bytes.length - 22; index >= 0; index -= 1) {
+    if (zipValue(bytes, index, 4) === 0x06054b50) {
+      endOffset = index;
+      break;
+    }
+  }
+  if (endOffset < 0) throw new Error("不是有效的 xlsx 文件。");
+  const entries = zipValue(bytes, endOffset + 10, 2);
+  let centralOffset = zipValue(bytes, endOffset + 16, 4);
+  const decoder = new TextDecoder();
+  const files = {};
+  for (let entryIndex = 0; entryIndex < entries; entryIndex += 1) {
+    if (zipValue(bytes, centralOffset, 4) !== 0x02014b50) break;
+    const method = zipValue(bytes, centralOffset + 10, 2);
+    const compressedSize = zipValue(bytes, centralOffset + 20, 4);
+    const nameLength = zipValue(bytes, centralOffset + 28, 2);
+    const extraLength = zipValue(bytes, centralOffset + 30, 2);
+    const commentLength = zipValue(bytes, centralOffset + 32, 2);
+    const localOffset = zipValue(bytes, centralOffset + 42, 4);
+    const name = decoder.decode(bytes.slice(centralOffset + 46, centralOffset + 46 + nameLength));
+    const localNameLength = zipValue(bytes, localOffset + 26, 2);
+    const localExtraLength = zipValue(bytes, localOffset + 28, 2);
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    files[name] = await unzipEntryBytes(bytes, method, dataStart, compressedSize);
+    centralOffset += 46 + nameLength + extraLength + commentLength;
+  }
+  return files;
+}
+function xlsxColumnIndex(ref = "") {
+  const letters = String(ref || "").match(/^[A-Z]+/i)?.[0] || "";
+  return letters.split("").reduce((sum, char) => sum * 26 + char.toUpperCase().charCodeAt(0) - 64, 0) || 1;
+}
+function xlsxSheetRows(xml, sharedStrings = []) {
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  return Array.from(doc.getElementsByTagNameNS("*", "row")).map((row) => {
+    const values = [];
+    Array.from(row.getElementsByTagNameNS("*", "c")).forEach((cell) => {
+      const index = xlsxColumnIndex(cell.getAttribute("r")) - 1;
+      const type = cell.getAttribute("t") || "";
+      let value = "";
+      if (type === "s") {
+        const sharedIndex = Number(cell.getElementsByTagNameNS("*", "v")[0]?.textContent || 0);
+        value = sharedStrings[sharedIndex] || "";
+      } else if (type === "inlineStr") {
+        value = Array.from(cell.getElementsByTagNameNS("*", "t")).map((node) => node.textContent || "").join("");
+      } else {
+        value = cell.getElementsByTagNameNS("*", "v")[0]?.textContent || "";
+      }
+      values[index] = value;
+    });
+    return values;
+  });
+}
+async function xlsxWorkbookSheets(file) {
+  const entries = await unzipXlsxEntries(await file.arrayBuffer());
+  const decoder = new TextDecoder();
+  const sharedXml = entries["xl/sharedStrings.xml"] ? decoder.decode(entries["xl/sharedStrings.xml"]) : "";
+  const sharedStrings = sharedXml ? Array.from(new DOMParser().parseFromString(sharedXml, "application/xml").getElementsByTagNameNS("*", "si")).map((si) => Array.from(si.getElementsByTagNameNS("*", "t")).map((node) => node.textContent || "").join("")) : [];
+  return Object.keys(entries)
+    .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(name))
+    .sort()
+    .map((name, index) => ({ name: `工作表${index + 1}`, rows: xlsxSheetRows(decoder.decode(entries[name]), sharedStrings) }));
+}
+async function fileToWorkbookSheets(file) {
+  const name = file.name || "";
+  if (/\.xlsx$/i.test(name)) return xlsxWorkbookSheets(file);
+  return textWorkbookSheets(await file.text(), name);
+}
+function importWorkbookToData(sheets) {
+  const target = normalize(data);
+  const stats = { records: 0, members: 0, items: 0, checkins: 0, skipped: 0, seenRecordKeys: new Set() };
+  sheets.forEach((sheet) => {
+    const rows = (sheet.rows || []).filter((row) => row.some((cell) => importCellText(cell)));
+    importRowsFromRecordTable(target, stats, rows);
+    importMixedDetailRows(target, stats, rows);
+  });
+  return { data: normalize(target), stats };
+}
+async function importData(file) {
+  try {
+    if (!file) return;
+    if (/\.json$/i.test(file.name || "")) {
+      const text = await file.text();
+      createBackup("导入 JSON 前备份");
+      data = normalize(JSON.parse(String(text || "{}")));
+    } else {
+      const sheets = await fileToWorkbookSheets(file);
+      const result = importWorkbookToData(sheets);
+      if (!result.stats.records) throw new Error("没有识别到可恢复的每日记录。请在 Google 表格里切到“全部记录”工作表，下载 CSV 后再导入。");
+      const confirmed = confirm(`识别到 ${result.stats.records} 条记录、${result.stats.checkins} 个打卡、${result.stats.members} 个新成员、${result.stats.items} 个新项目。\n\n确定合并导入到当前日记软件吗？导入前会自动备份当前数据。`);
+      if (!confirmed) return;
+      createBackup("表格恢复导入前备份");
+      data = result.data;
+    }
     persistLocal();
-    if (!data.members.includes(currentMember)) currentMember = data.members[0];
+    if (!data.members.includes(currentMember)) currentMember = data.members[0] || currentMember;
     loadForm();
     render();
-  };
-  reader.readAsText(file, "utf-8");
+    showDialog("导入完成", `已恢复到本机数据，共 ${Object.keys(data.records || {}).length} 条记录。确认无误后，可以点击“中心回灌云同步”写回云端。`, "");
+  } catch (error) {
+    showDialog("导入失败", error.message || "无法导入这个文件。", "");
+  }
 }
 async function saveAdminConfig() {
   if (!adminUnlocked) return setView("admin");
