@@ -5131,7 +5131,8 @@ function rowsToXlsxWorksheet(rows, columns = [], options = {}) {
       `r="${rowIndex + 1}"`,
       rowSpec.outlineLevel ? `outlineLevel="${Number(rowSpec.outlineLevel)}"` : "",
       rowSpec.hidden ? 'hidden="1"' : "",
-      rowSpec.collapsed ? 'collapsed="1"' : ""
+      rowSpec.collapsed ? 'collapsed="1"' : "",
+      rowSpec.height ? `ht="${Number(rowSpec.height)}" customHeight="1"` : ""
     ].filter(Boolean).join(" ");
     let colIndex = 1;
     const cells = row.map((cell) => {
@@ -5200,15 +5201,38 @@ function xlsxStylesXml() {
   </cellXfs>
 </styleSheet>`;
 }
-function buildXlsxWorkbook(sheetName, rows, columns = [], options = {}) {
+function uniqueSheetName(name, used = new Set()) {
+  const base = sheetNameSafe(name || "Sheet").slice(0, 31) || "Sheet";
+  let next = base;
+  let index = 2;
+  while (used.has(next)) {
+    const suffix = ` ${index}`;
+    next = base.slice(0, 31 - suffix.length) + suffix;
+    index += 1;
+  }
+  used.add(next);
+  return next;
+}
+function buildXlsxWorkbookSheets(sheets = []) {
+  const usable = sheets.length ? sheets : [{ name: "Sheet1", rows: [[styledCell("", "sItem")]], columns: [80] }];
+  const used = new Set();
+  const sheetEntries = usable.map((sheet, index) => ({
+    ...sheet,
+    id: index + 1,
+    relId: `rId${index + 1}`,
+    safeName: uniqueSheetName(sheet.name || `Sheet${index + 1}`, used)
+  }));
   return createZip([
-    { name: "[Content_Types].xml", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>` },
+    { name: "[Content_Types].xml", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${sheetEntries.map((sheet) => `<Override PartName="/xl/worksheets/sheet${sheet.id}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>` },
     { name: "_rels/.rels", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
-    { name: "xl/workbook.xml", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEscape(sheetNameSafe(sheetName))}" sheetId="1" r:id="rId1"/></sheets></workbook>` },
-    { name: "xl/_rels/workbook.xml.rels", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
+    { name: "xl/workbook.xml", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheetEntries.map((sheet) => `<sheet name="${xmlEscape(sheet.safeName)}" sheetId="${sheet.id}" r:id="${sheet.relId}"/>`).join("")}</sheets></workbook>` },
+    { name: "xl/_rels/workbook.xml.rels", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheetEntries.map((sheet) => `<Relationship Id="${sheet.relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${sheet.id}.xml"/>`).join("")}<Relationship Id="rId${sheetEntries.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
     { name: "xl/styles.xml", content: xlsxStylesXml() },
-    { name: "xl/worksheets/sheet1.xml", content: rowsToXlsxWorksheet(rows, columns, options) }
+    ...sheetEntries.map((sheet) => ({ name: `xl/worksheets/sheet${sheet.id}.xml`, content: rowsToXlsxWorksheet(sheet.rows || [], sheet.columns || [], { validations: sheet.validations || [] }) }))
   ]);
+}
+function buildXlsxWorkbook(sheetName, rows, columns = [], options = {}) {
+  return buildXlsxWorkbookSheets([{ name: sheetName, rows, columns, validations: options.validations || [] }]);
 }
 function downloadBlob(blob, filename) {
   const link = document.createElement("a");
@@ -5559,82 +5583,231 @@ function mixedExportGroupBlock(days, members, itemNames, report) {
   ];
   return { rows, blockWidth: 6, totalWeighted, totalQuota, totalDiff, totalVideo, totalAi };
 }
+function mixedExportItemColumnWidths(itemNames) {
+  return itemNames.map((name) => Math.min(112, Math.max(60, String(name || "").length * 11)));
+}
+function mixedExportMemberBlockWidth(itemNames, periods = checkinPeriods()) {
+  return 1 + periods.length + itemNames.length + 7;
+}
 function mixedExportColumnWidths(blockWidth, itemCount, memberCount) {
-  const block = [
-    46,
-    ...checkinPeriods().map(() => 52),
-    ...Array.from({ length: itemCount }, () => 60),
-    62,
-    62,
-    62,
-    62,
-    64,
-    64,
-    58,
-    76
-  ];
+  const block = [46, ...checkinPeriods().map(() => 48), ...Array.from({ length: itemCount }, () => 68), 74, 66, 66, 74, 74, 58, 112];
   return Array.from({ length: memberCount }, (_, index) => [
-    ...block,
+    ...block.slice(0, blockWidth),
     ...(index < memberCount - 1 ? [12] : [])
-  ]).flat().slice(0, memberCount * blockWidth + Math.max(0, memberCount - 1));
+  ]).flat();
 }
 function mixedExportColumns(blockWidth, itemCount, memberCount) {
+  return [48, 70, 70, 70, 12, ...mixedExportColumnWidths(blockWidth, itemCount, memberCount)];
+}
+function mixedXlsxRow(cells, height, extra = {}) {
+  return { cells, ...(height ? { height } : {}), ...extra };
+}
+function mixedExportRecordNote(rec) {
+  return rec?.reason || rec?.harvest || rec?.diary || "";
+}
+function mixedExportDailyReportText(weighted, quota, diff, note) {
+  const cleanedDiff = cleanTotalValue(diff);
+  const title = cleanedDiff >= 0 ? "超额/达标" : "未达标";
+  const lines = [
+    `${title}`,
+    `定额：${fmtTotal(quota)}`,
+    `完成：${fmtTotal(weighted)}`,
+    `差额：${signedTotalText(cleanedDiff)}`
+  ];
+  if (note) lines.push(`备注：${note}`);
+  return lines.join("\n");
+}
+function mixedExportGroupTotals(days, members, itemNames, report) {
+  const result = {
+    items: Object.fromEntries(itemNames.map((name) => [name, 0])),
+    raw: 0,
+    weighted: 0,
+    quota: 0,
+    diff: 0,
+    video: 0,
+    ai: 0
+  };
+  days.forEach((day) => {
+    members.forEach((member) => {
+      const rec = recordForReport(report, day, member);
+      const items = rec?.items || {};
+      itemNames.forEach((name) => {
+        result.items[name] += Number(items[name] || 0);
+      });
+      const totals = totalsForItems(items, itemNames, report);
+      const products = productTotalsForItems(items, itemNames, report);
+      result.raw += totals.raw;
+      result.weighted += totals.weighted;
+      result.video += products.video;
+      result.ai += products.ai;
+      result.quota += memberQuota(member, day);
+    });
+  });
+  result.diff = result.weighted - result.quota;
+  return result;
+}
+function mixedExportGroupDayTotals(day, members, itemNames, report) {
+  return mixedExportGroupTotals([day], members, itemNames, report);
+}
+function mixedExportMemberDay(member, day, itemNames, report) {
+  const rec = recordForReport(report, day, member);
+  const items = rec?.items || {};
+  const totals = totalsForItems(items, itemNames, report);
+  const products = productTotalsForItems(items, itemNames, report);
+  const quota = memberQuota(member, day);
+  const diff = totals.weighted - quota;
+  return { rec, items, raw: totals.raw, weighted: totals.weighted, quota, diff, video: products.video, ai: products.ai, note: mixedExportRecordNote(rec) };
+}
+function mixedExportMemberTotalCells(member, days, itemNames, periods, report) {
+  const total = aggregateMemberRange(member, days, report, itemNames);
   return [
-    54,
-    64,
-    64,
-    64,
-    64,
-    64,
-    12,
-    ...mixedExportColumnWidths(blockWidth, itemCount, memberCount)
+    styledCell("合计", "sDate"),
+    ...periods.map(() => styledCell("", "sCheckinBlank")),
+    ...itemNames.map((name) => styledTotalCell(total.items?.[name] || 0, "sItem")),
+    styledTotalCell(total.weighted, "sTotal"),
+    styledTotalCell(total.quota, "sQuota"),
+    styledTotalCell(total.diff, cleanTotalValue(total.diff) >= 0 ? "sDiffGood" : "sDiffBad"),
+    styledTotalCell(total.video, "sTotal"),
+    styledTotalCell(total.ai, "sTotal"),
+    styledCell("", "sItem"),
+    styledCell("", "sNote")
   ];
 }
-function mixedExportSectionRows(period, periodIndex, members, group, itemNames, periods, report) {
-  const summaryBlock = mixedExportGroupBlock(period.days, members, itemNames, report);
-  const memberBlocks = members.map((member, index) => mixedExportBlock(member, index, group, period.days, itemNames, periods, report));
-  const blocks = [summaryBlock, ...memberBlocks];
-  const maxRows = Math.max(...blocks.map((block) => block.rows.length));
-  const spacer = styledCell("", "sSpacer");
-  const sectionWidth = summaryBlock.blockWidth + 1 + memberBlocks.reduce((sum, block) => sum + block.blockWidth, 0) + Math.max(0, memberBlocks.length - 1);
-  const title = `${period.label}｜${period.start} 至 ${period.end}｜全组完成 ${fmtTotal(summaryBlock.totalWeighted)}｜视频成品 ${fmtTotal(summaryBlock.totalVideo)}｜AI成品 ${fmtTotal(summaryBlock.totalAi)}｜定额 ${fmtTotal(summaryBlock.totalQuota)}｜差额 ${fmtTotal(summaryBlock.totalDiff)}`;
-  const collapsed = periodIndex > 0;
-  const rows = [
-    { cells: [styledCell(title, "sTitle", { mergeAcross: sectionWidth - 1 })], collapsed }
+function mixedExportMemberDayCells(member, day, itemNames, periods, report) {
+  const row = mixedExportMemberDay(member, day, itemNames, report);
+  const status = row.rec?.status || (row.weighted ? (cleanTotalValue(row.diff) >= 0 ? "达标" : "未达标") : "");
+  return [
+    styledCell(day.slice(5), "sDate"),
+    ...periods.map((period) => styledCell(checkinDisplay(row.rec?.checkins?.[period.key]), mixedExportCheckinStyle(row.rec?.checkins?.[period.key]))),
+    ...itemNames.map((name) => styledCell(Number(row.items[name] || 0) || "", "sItem")),
+    styledTotalCell(row.weighted, "sTotal"),
+    styledTotalCell(row.quota, "sQuota"),
+    styledTotalCell(row.diff, cleanTotalValue(row.diff) >= 0 ? "sDiffGood" : "sDiffBad"),
+    styledTotalCell(row.video, "sTotal"),
+    styledTotalCell(row.ai, "sTotal"),
+    styledCell(status, mixedExportStatusStyle(status)),
+    styledCell(row.note, "sNote")
   ];
-  for (let rowIndex = 0; rowIndex < maxRows; rowIndex += 1) {
-    const cells = [
-      ...(summaryBlock.rows[rowIndex] || Array.from({ length: summaryBlock.blockWidth }, () => styledCell("", "sItem"))),
-      spacer,
-      ...memberBlocks.flatMap((block, blockIndex) => [
-        ...(block.rows[rowIndex] || Array.from({ length: block.blockWidth }, () => styledCell("", "sItem"))),
-        ...(blockIndex < memberBlocks.length - 1 ? [spacer] : [])
+}
+function mixedHorizontalDetailSheet(exportPeriods, group, members, itemNames, periods, report) {
+  const summaryWidth = 4;
+  const spacerWidth = 1;
+  const blockWidth = mixedExportMemberBlockWidth(itemNames, periods);
+  const columns = [48, 70, 70, 70, 12];
+  const itemWidths = mixedExportItemColumnWidths(itemNames);
+  const memberColumns = [48, ...periods.map(() => 48), ...itemWidths, 74, 66, 66, 74, 74, 58, 112];
+  members.forEach((_, index) => {
+    columns.push(...memberColumns);
+    if (index < members.length - 1) columns.push(12);
+  });
+  const rows = [];
+  const validations = [];
+  const values = normalizeCheckinOptions(report.checkinOptions || defaultData.checkinOptions);
+  exportPeriods.forEach((period, periodIndex) => {
+    const sectionStart = rows.length;
+    const groupTotal = mixedExportGroupTotals(period.days, members, itemNames, report);
+    const memberTotals = members.map((member) => aggregateMemberRange(member, period.days, report, itemNames));
+    const collapsed = periodIndex > 0;
+    const titleCells = [
+      styledCell(`${period.label}｜${period.start} 至 ${period.end}`, "sTitle", { mergeAcross: summaryWidth - 1 }),
+      styledCell("", "sSpacer"),
+      ...members.flatMap((member, index) => {
+        const total = memberTotals[index] || {};
+        return [
+          styledCell(`名字：${member}｜工作量 ${fmtTotal(total.weighted || 0)}｜定额 ${fmtTotal(total.quota || 0)}｜差额 ${signedTotalText(total.diff || 0)}`, "sTitle", { mergeAcross: blockWidth - 1 }),
+          ...(index < members.length - 1 ? [styledCell("", "sSpacer")] : [])
+        ];
+      })
+    ];
+    rows.push(mixedXlsxRow(titleCells, 35.25, collapsed ? { collapsed: true } : {}));
+    const headerCells = [
+      ...["日期", "全组定额", "全组完成", "全组差额"].map((label) => styledCell(label, "sHeader")),
+      styledCell("", "sSpacer"),
+      ...members.flatMap((_, index) => [
+        ...["日期", ...periods.map((item) => `${item.label}打卡`), ...itemNames, "工作量", "定额", "差额", "视频成品", "AI成品", "状态", "备注"].map((label) => styledCell(label, "sHeader")),
+        ...(index < members.length - 1 ? [styledCell("", "sSpacer")] : [])
       ])
     ];
-    rows.push(collapsed ? { cells, outlineLevel: 1, hidden: true } : cells);
-  }
-  return rows;
-}
-function mixedExportCheckinValidations(exportPeriods, members, blockWidth, periods, report, summaryBlockWidth = 6, startRowOffset = 0) {
-  const values = normalizeCheckinOptions(report.checkinOptions || defaultData.checkinOptions);
-  const validations = [];
-  let rowOffset = startRowOffset;
-  exportPeriods.forEach((period, periodIndex) => {
-    const recordStartRow = rowOffset + 5;
+    rows.push(mixedXlsxRow(headerCells, 30.75, collapsed ? { outlineLevel: 1, hidden: true } : {}));
+    const totalCells = [
+      styledCell("合计", "sDate"),
+      styledTotalCell(groupTotal.quota, "sQuota"),
+      styledTotalCell(groupTotal.weighted, "sTotal"),
+      styledTotalCell(groupTotal.diff, cleanTotalValue(groupTotal.diff) >= 0 ? "sDiffGood" : "sDiffBad"),
+      styledCell("", "sSpacer"),
+      ...members.flatMap((member, index) => [
+        ...mixedExportMemberTotalCells(member, period.days, itemNames, periods, report),
+        ...(index < members.length - 1 ? [styledCell("", "sSpacer")] : [])
+      ])
+    ];
+    rows.push(mixedXlsxRow(totalCells, 39, collapsed ? { outlineLevel: 1, hidden: true } : {}));
+    period.days.forEach((day) => {
+      const groupDay = mixedExportGroupDayTotals(day, members, itemNames, report);
+      const dayCells = [
+        styledCell(day.slice(5), "sDate"),
+        styledTotalCell(groupDay.quota, "sQuota"),
+        styledTotalCell(groupDay.weighted, "sTotal"),
+        styledTotalCell(groupDay.diff, cleanTotalValue(groupDay.diff) >= 0 ? "sDiffGood" : "sDiffBad"),
+        styledCell("", "sSpacer"),
+        ...members.flatMap((member, index) => [
+          ...mixedExportMemberDayCells(member, day, itemNames, periods, report),
+          ...(index < members.length - 1 ? [styledCell("", "sSpacer")] : [])
+        ])
+      ];
+      rows.push(mixedXlsxRow(dayCells, 39, collapsed ? { outlineLevel: 1, hidden: true } : {}));
+    });
+    const recordStartRow = sectionStart + 4;
     const recordEndRow = recordStartRow + period.days.length - 1;
     if (recordEndRow >= recordStartRow) {
       members.forEach((_, memberIndex) => {
-        const blockStartCol = summaryBlockWidth + 2 + memberIndex * (blockWidth + 1);
-        periods.forEach((__, periodIndex) => {
-          const col = columnName(blockStartCol + 1 + periodIndex);
+        const blockStartCol = summaryWidth + spacerWidth + 1 + memberIndex * (blockWidth + spacerWidth);
+        periods.forEach((__, checkinIndex) => {
+          const col = columnName(blockStartCol + 1 + checkinIndex);
           validations.push({ sqref: `${col}${recordStartRow}:${col}${recordEndRow}`, values });
         });
       });
     }
-    const sectionRows = 1 + Math.max(4 + period.days.length, 4);
-    rowOffset += sectionRows + (periodIndex < exportPeriods.length - 1 ? 1 : 0);
+    if (periodIndex < exportPeriods.length - 1) {
+      rows.push(mixedXlsxRow([styledCell("", "sSpacer", { mergeAcross: Math.max(columns.length - 1, 0) })], 8));
+    }
   });
-  return validations;
+  return { name: "混合明细", rows, columns, validations };
+}
+function mixedTotalsExportSheet(exportPeriods, group, members, itemNames, report) {
+  const header = ["范围", "成员", "工作量", "定额", "差额", "视频成品", "AI成品", ...itemNames];
+  const columns = [128, 86, 74, 74, 74, 74, 74, ...mixedExportItemColumnWidths(itemNames)];
+  const rows = [
+    mixedXlsxRow([styledCell(`总数｜${group || "未分组"}`, "sTitle", { mergeAcross: header.length - 1 })], 32),
+    mixedXlsxRow(header.map((label) => styledCell(label, "sHeader")), 30)
+  ];
+  exportPeriods.forEach((period, periodIndex) => {
+    const groupTotal = mixedExportGroupTotals(period.days, members, itemNames, report);
+    rows.push(mixedXlsxRow([
+      styledCell(`${period.label}\n${period.start} 至 ${period.end}`, "sDate"),
+      styledCell("全组", "sDate"),
+      styledTotalCell(groupTotal.weighted, "sTotal"),
+      styledTotalCell(groupTotal.quota, "sQuota"),
+      styledTotalCell(groupTotal.diff, cleanTotalValue(groupTotal.diff) >= 0 ? "sDiffGood" : "sDiffBad"),
+      styledTotalCell(groupTotal.video, "sTotal"),
+      styledTotalCell(groupTotal.ai, "sTotal"),
+      ...itemNames.map((name) => styledTotalCell(groupTotal.items[name] || 0, "sItem"))
+    ], 28));
+    members.forEach((member) => {
+      const total = aggregateMemberRange(member, period.days, report, itemNames);
+      rows.push(mixedXlsxRow([
+        styledCell(period.label, "sItem"),
+        styledCell(member, "sItem"),
+        styledTotalCell(total.weighted, "sTotal"),
+        styledTotalCell(total.quota, "sQuota"),
+        styledTotalCell(total.diff, cleanTotalValue(total.diff) >= 0 ? "sDiffGood" : "sDiffBad"),
+        styledTotalCell(total.video, "sTotal"),
+        styledTotalCell(total.ai, "sTotal"),
+        ...itemNames.map((name) => styledTotalCell(total.items?.[name] || 0, "sItem"))
+      ], 24));
+    });
+    if (periodIndex < exportPeriods.length - 1) rows.push(mixedXlsxRow([styledCell("", "sSpacer", { mergeAcross: header.length - 1 })], 8));
+  });
+  return { name: "总数", rows, columns };
 }
 function buildMixedTableWorkbookXml() {
   const report = selectedReportData();
@@ -5647,48 +5820,36 @@ function buildMixedTableWorkbookXml() {
     const members = membersForGroupValue(group, report);
     const itemNames = groupVisibleItems(group, report);
     const periods = checkinPeriods();
+    const name = `${group || "混合"}${mixedExportTypeLabel(exportType)}`;
     if (!members.length) {
       return {
         group,
         start,
         end,
-        name: `${group || "混合"}总表`,
-        rows: [[styledCell("暂无成员", "sTitle")]],
-        columns: [120],
-        xml: styledWorkbookXml([rowsToStyledWorksheet(`${group || "混合"}总表`, [[styledCell("暂无成员", "sTitle")]], [120])], mixedWorkbookStylesXml())
+        exportType,
+        name,
+        sheets: [{ name: "混合明细", rows: [[styledCell("暂无成员", "sTitle")]], columns: [120] }]
       };
     }
-    const detailRows = exportPeriods.flatMap((period, index) => {
-      const sectionRows = mixedExportSectionRows(period, index, members, group, itemNames, periods, report);
-      return index < exportPeriods.length - 1 ? [...sectionRows, [styledCell("", "sSpacer", { mergeAcross: 3 })]] : sectionRows;
-    });
-    const blockWidth = mixedExportBlock(members[0], 0, group, exportPeriods[0].days, itemNames, periods, report).blockWidth;
+    const detailSheet = mixedHorizontalDetailSheet(exportPeriods, group, members, itemNames, periods, report);
+    const totalsSheet = mixedTotalsExportSheet(exportPeriods, group, members, itemNames, report);
     const monthlyBlock = mixedMonthlyReportExportBlock(group, report);
+    const monthlySheet = { name: "人员月度总览", rows: monthlyBlock.rows, columns: monthlyBlock.columns };
     const checkinBlock = mixedCheckinExportBlock(exportPeriods, mixedCheckinExportGroup(report, group), report);
-    const rows = [];
-    let columns = [];
-    let validations = [];
-    const addBlock = (blockRows, blockColumns) => {
-      if (rows.length) rows.push([styledCell("", "sSpacer", { mergeAcross: Math.max((blockColumns || []).length, 1) - 1 })]);
-      const offset = rows.length;
-      rows.push(...blockRows);
-      columns = columns.length ? mergeColumnWidths(columns, blockColumns || []) : (blockColumns || []);
-      return offset;
-    };
-    if (exportType === "all" || exportType === "monthly") addBlock(monthlyBlock.rows, monthlyBlock.columns);
-    if (exportType === "all" || exportType === "detail") {
-      const detailOffset = addBlock(detailRows, mixedExportColumns(blockWidth, itemNames.length, members.length));
-      validations = validations.concat(mixedExportCheckinValidations(exportPeriods, members, blockWidth, periods, report, 6, detailOffset));
-    }
-    if (exportType === "all" || exportType === "checkin") addBlock(checkinBlock.rows, checkinBlock.columns);
-    const sheet = rowsToStyledWorksheet(`${group || "混合"}总表`, rows, columns);
-    return { group, start, end, exportType, name: `${group || "混合"}${mixedExportTypeLabel(exportType)}`, rows, columns, validations, xml: styledWorkbookXml([sheet], mixedWorkbookStylesXml()) };
+    const checkinSheet = { name: "小组打卡", rows: checkinBlock.rows, columns: checkinBlock.columns };
+    const sheets = [];
+    if (exportType === "all") sheets.push(detailSheet, totalsSheet, monthlySheet, checkinSheet);
+    if (exportType === "detail") sheets.push(detailSheet);
+    if (exportType === "monthly") sheets.push(monthlySheet);
+    if (exportType === "checkin") sheets.push(checkinSheet);
+    return { group, start, end, exportType, name, sheets };
   });
 }
 function exportMixedTableWorkbook() {
   saveFormSilently();
-  const { group, start, end, exportType, name, rows, columns, validations } = buildMixedTableWorkbookXml();
-  downloadBlob(buildXlsxWorkbook(name, rows, columns, { validations }), `mixed_table_${exportType}_${group || "all"}_${start}_${end}.xlsx`);
+  const { group, start, end, exportType, name, sheets, rows, columns, validations } = buildMixedTableWorkbookXml();
+  const workbookSheets = sheets?.length ? sheets : [{ name, rows, columns, validations }];
+  downloadBlob(buildXlsxWorkbookSheets(workbookSheets), `mixed_table_${exportType}_${group || "all"}_${start}_${end}.xlsx`);
 }
 function buildCsvBackups() {
   const itemNames = configuredItems();
