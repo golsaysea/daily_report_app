@@ -4858,8 +4858,8 @@ function mixedWorkbookStylesXml() {
   const borders = excelBordersXml();
   return `
     <Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Center" ss:WrapText="1"/></Style>
-    <Style ss:ID="sTitle"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#D95F5F" ss:Pattern="Solid"/>${borders}</Style>
-    <Style ss:ID="sHeader"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#E57373" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sTitle"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Font ss:Bold="1" ss:Color="#000000"/><Interior ss:Color="#D95F5F" ss:Pattern="Solid"/>${borders}</Style>
+    <Style ss:ID="sHeader"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/><Font ss:Bold="1" ss:Color="#000000"/><Interior ss:Color="#E57373" ss:Pattern="Solid"/>${borders}</Style>
     <Style ss:ID="sDate"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Font ss:Bold="1"/><Interior ss:Color="#FCE4E4" ss:Pattern="Solid"/>${borders}</Style>
     <Style ss:ID="sItem"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Interior ss:Color="#FBEAEA" ss:Pattern="Solid"/>${borders}</Style>
     <Style ss:ID="sTotal"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Font ss:Bold="1"/><Interior ss:Color="#EA9A9A" ss:Pattern="Solid"/>${borders}</Style>
@@ -5181,8 +5181,8 @@ function xlsxStylesXml() {
   <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
   <cellXfs count="18">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
-    ${xf(3, 1, "center", true)}
-    ${xf(4, 1, "center", true)}
+    ${xf(3, 2, "center", true)}
+    ${xf(4, 2, "center", true)}
     ${xf(5, 2)}
     ${xf(6)}
     ${xf(7, 2)}
