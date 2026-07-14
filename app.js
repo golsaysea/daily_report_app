@@ -26,6 +26,7 @@ const defaultData = {
   fbSpecialties: [],
   adminPassword: "",
   sheetBackupEnabled: true,
+  sheetBackupBaseName: "daily_report",
   backupCleanupEnabled: false,
   autoAudit: false,
   deletedMembers: {},
@@ -41,6 +42,8 @@ let currentMember = data.members[0] || "成员A";
 let currentDate = dateKeyFromDate(new Date());
 let fileHandle = null;
 let cloudDirHandle = null;
+let sheetBackupDirHandle = null;
+let sheetBackupLocationLabel = "";
 let lastFileModified = 0;
 let lastCloudText = "";
 let cloudLocationLabel = "";
@@ -437,6 +440,7 @@ function normalize(source) {
       : clone(defaultData.timezones),
     adminPassword: String(loaded.adminPassword || defaultData.adminPassword),
     sheetBackupEnabled: loaded.sheetBackupEnabled !== false,
+    sheetBackupBaseName: String(loaded.sheetBackupBaseName || defaultData.sheetBackupBaseName),
     backupCleanupEnabled: loaded.backupCleanupEnabled === true,
     autoAudit: loaded.autoAudit === true,
     deletedMembers: loaded.deletedMembers && typeof loaded.deletedMembers === "object" ? clone(loaded.deletedMembers) : {},
@@ -652,6 +656,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.quota = Number(local.quota || 0);
     merged.adminPassword = String(local.adminPassword || "");
     merged.sheetBackupEnabled = local.sheetBackupEnabled !== false;
+    merged.sheetBackupBaseName = safeBackupBaseName(local.sheetBackupBaseName || defaultData.sheetBackupBaseName);
     merged.backupCleanupEnabled = local.backupCleanupEnabled === true;
     merged.autoAudit = local.autoAudit === true;
     merged.deletedMembers = clone(local.deletedMembers || {});
@@ -673,6 +678,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.quota = Number(remote.quota ?? local.quota ?? 0);
     merged.adminPassword = String(remote.adminPassword || local.adminPassword || "");
     merged.sheetBackupEnabled = remote.sheetBackupEnabled !== false;
+    merged.sheetBackupBaseName = safeBackupBaseName(remote.sheetBackupBaseName || local.sheetBackupBaseName || defaultData.sheetBackupBaseName);
     merged.backupCleanupEnabled = remote.backupCleanupEnabled === true;
     merged.autoAudit = remote.autoAudit === true;
     merged.deletedMembers = { ...(local.deletedMembers || {}), ...(remote.deletedMembers || {}) };
@@ -924,6 +930,12 @@ async function restoreSummaryFolders() {
   summaryLocationLabel = summaryDirHandle?.name || "";
   renderSummaryFolders();
 }
+async function restoreSheetBackupDirectory() {
+  const dir = await loadDirectoryHandle("sheetBackupDirectory");
+  sheetBackupDirHandle = dir || null;
+  sheetBackupLocationLabel = sheetBackupDirHandle?.name || "";
+  renderSheetBackupStatus();
+}
 async function hasCloudPermission(dir) {
   if (!dir) return false;
   const options = { mode: "readwrite" };
@@ -1030,6 +1042,7 @@ async function restoreCloudDirectory() {
   if (dir) await useCloudDirectory(dir, false);
   else setSyncStatus("未选择云端文件夹，正在使用本地缓存");
   await restoreSummaryFolders();
+  await restoreSheetBackupDirectory();
 }
 function scheduleSave(mode = "records") {
   window.clearTimeout(saveTimer);
@@ -4081,6 +4094,8 @@ function clearFreeTable() {
 function renderAdminSettings() {
   $("autoAuditToggle").checked = false;
   $("sheetBackupToggle").checked = data.sheetBackupEnabled !== false;
+  if ($("sheetBackupBaseNameInput")) $("sheetBackupBaseNameInput").value = data.sheetBackupBaseName || defaultData.sheetBackupBaseName;
+  renderSheetBackupStatus();
   $("backupCleanupToggle").checked = data.backupCleanupEnabled === true;
   $("checkinOptionsInput").value = (data.checkinOptions || defaultData.checkinOptions).join("\n");
   $("passMessagesInput").value = (data.reviewMessages?.pass || defaultData.reviewMessages.pass).join("\n");
@@ -4089,6 +4104,7 @@ function renderAdminSettings() {
 function collectAdminSettings() {
   data.autoAudit = false;
   data.sheetBackupEnabled = $("sheetBackupToggle").checked;
+  data.sheetBackupBaseName = safeBackupBaseName($("sheetBackupBaseNameInput")?.value || data.sheetBackupBaseName || defaultData.sheetBackupBaseName);
   data.backupCleanupEnabled = $("backupCleanupToggle").checked;
   data.checkinOptions = normalizeCheckinOptions($("checkinOptionsInput").value.split(/\r?\n/)).slice(0, 20);
   if (!data.checkinOptions.length) data.checkinOptions = clone(defaultData.checkinOptions);
@@ -5596,28 +5612,105 @@ function buildCsvBackups() {
     { name: `daily_report_summary_${stamp}.csv`, text: "\ufeff" + toCsv(summary) }
   ];
 }
-async function backupSheets(silent = false) {
-  const stamp = currentDate.slice(0, 7);
-  const files = [
-    { name: `daily_report_3months_${stamp}.xls`, text: buildThreeMonthWorkbookXml() },
-    ...buildCsvBackups()
+function safeBackupBaseName(value = defaultData.sheetBackupBaseName) {
+  return String(value || defaultData.sheetBackupBaseName || "daily_report")
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .replace(/\s+/g, "_")
+    .slice(0, 80) || "daily_report";
+}
+function backupMimeType(name = "") {
+  if (/\.json$/i.test(name)) return "application/json;charset=utf-8";
+  if (/\.xls$/i.test(name)) return "application/vnd.ms-excel;charset=utf-8";
+  return "text/csv;charset=utf-8";
+}
+function buildSheetBackupFileSet() {
+  const base = safeBackupBaseName(data.sheetBackupBaseName || defaultData.sheetBackupBaseName);
+  const stamp = todayLocalKey();
+  const csvFiles = buildCsvBackups();
+  return [
+    { latestName: `${base}_3months_latest.xls`, archiveName: `${base}_3months_${stamp}.xls`, downloadName: `${base}_3months_${stamp}.xls`, text: buildThreeMonthWorkbookXml() },
+    { latestName: `${base}_records_latest.csv`, archiveName: `${base}_records_${stamp}.csv`, downloadName: `${base}_records_${stamp}.csv`, text: csvFiles[0].text },
+    { latestName: `${base}_summary_latest.csv`, archiveName: `${base}_summary_${stamp}.csv`, downloadName: `${base}_summary_${stamp}.csv`, text: csvFiles[1].text },
+    { latestName: `${base}_data_latest.json`, archiveName: `${base}_data_${stamp}.json`, downloadName: `${base}_data_${stamp}.json`, text: JSON.stringify(normalize(data), null, 2) }
   ];
-  if (desktopApp?.isDesktop) {
-    const result = await desktopApp.writeCsvBackup(files);
-    if (result?.folder) {
-      if (!silent) showDialog("表格备份已生成", `3个月表格和 CSV 已写入：${result.folder}。放在 Google Drive 同步目录里后，可用 Google 表格打开。`, "");
-      return;
+}
+async function writeTextFileToDirectory(dir, name, text) {
+  const handle = await dir.getFileHandle(name, { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(text);
+  await writable.close();
+}
+async function writeSheetBackupsToDirectory(dir, files) {
+  if (!dir || !(await hasCloudPermission(dir))) {
+    throw new Error("没有表格备份文件夹写入权限，请重新选择表格备份文件夹。");
+  }
+  const stamp = todayLocalKey();
+  const archiveRoot = await dir.getDirectoryHandle("daily_report_archives", { create: true });
+  const archiveDir = await archiveRoot.getDirectoryHandle(stamp, { create: true });
+  for (const file of files) {
+    await writeTextFileToDirectory(dir, file.latestName, file.text);
+    await writeTextFileToDirectory(archiveDir, file.archiveName, file.text);
+  }
+  await writeTextFileToDirectory(dir, `${safeBackupBaseName(data.sheetBackupBaseName)}_manifest.json`, JSON.stringify({
+    updated_at: new Date().toISOString(),
+    archive_date: stamp,
+    record_count: Object.keys(data.records || {}).length,
+    latest_files: files.map((file) => file.latestName),
+    archive_folder: `daily_report_archives/${stamp}`
+  }, null, 2));
+  return `${dir.name || "备份文件夹"}\\daily_report_archives\\${stamp}`;
+}
+function renderSheetBackupStatus() {
+  if ($("sheetBackupFolderStatus")) {
+    $("sheetBackupFolderStatus").textContent = sheetBackupDirHandle
+      ? `已选择：${sheetBackupLocationLabel || sheetBackupDirHandle.name || "表格备份文件夹"}`
+      : "未选择表格备份文件夹；未选择时手动备份仍会下载文件。";
+  }
+  if ($("sheetBackupBaseNameInput") && !$("sheetBackupBaseNameInput").value) {
+    $("sheetBackupBaseNameInput").value = data.sheetBackupBaseName || defaultData.sheetBackupBaseName;
+  }
+}
+async function chooseSheetBackupFolder() {
+  if (!("showDirectoryPicker" in window)) return alert("当前浏览器不支持选择文件夹，请用新版 Chrome/Edge。");
+  const dir = await window.showDirectoryPicker({ mode: "readwrite" });
+  if (!(await hasCloudPermission(dir))) return alert("没有获得这个文件夹的写入权限，请重新选择。");
+  sheetBackupDirHandle = dir;
+  sheetBackupLocationLabel = dir.name || "表格备份文件夹";
+  await saveDirectoryHandle("sheetBackupDirectory", dir);
+  renderSheetBackupStatus();
+  showDialog("表格备份文件夹已选择", `以后会写入固定最新版，并在 daily_report_archives 里每天保留一份。\n\n当前文件夹：${sheetBackupLocationLabel}`, "");
+}
+async function backupSheets(silent = false) {
+  collectAdminSettings();
+  const files = buildSheetBackupFileSet();
+  if (sheetBackupDirHandle) {
+    try {
+      const folder = await writeSheetBackupsToDirectory(sheetBackupDirHandle, files);
+      if (!silent) showDialog("表格备份已完成", `固定最新版和今日归档已写入：${folder}`, "");
+      return { written: true, folder };
+    } catch (error) {
+      if (!silent) showDialog("表格备份失败", error.message || "无法写入表格备份文件夹。", "");
+      if (silent) return { written: false, error: error.message || "backup failed" };
     }
   }
-  if (silent) return;
+  if (desktopApp?.isDesktop) {
+    const result = await desktopApp.writeCsvBackup(files.map((file) => ({ name: file.downloadName, text: file.text })));
+    if (result?.folder) {
+      if (!silent) showDialog("表格备份已生成", `表格、CSV 和 JSON 已写入：${result.folder}。放在 Google Drive 同步目录里后，可用 Google 表格打开。`, "");
+      return { written: true, folder: result.folder };
+    }
+  }
+  if (silent) return { written: false, error: "no-folder" };
   files.forEach((file) => {
-    const blob = new Blob([file.text], { type: file.name.endsWith(".xls") ? "application/vnd.ms-excel;charset=utf-8" : "text/csv;charset=utf-8" });
+    const blob = new Blob([file.text], { type: backupMimeType(file.downloadName) });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = file.name;
+    link.download = file.downloadName;
     link.click();
     URL.revokeObjectURL(link.href);
   });
+  return { written: true, downloaded: true };
 }
 function parseDelimitedRows(text, delimiter = ",") {
   const rows = [];
@@ -6216,6 +6309,16 @@ function bindEvents() {
   $("adminSaveBtn").onclick = saveAdminConfig;
   $("autoAuditToggle").onchange = () => { collectAdminSettings(); scheduleSave("admin"); };
   $("sheetBackupToggle").onchange = () => { collectAdminSettings(); scheduleSave("admin"); };
+  if ($("sheetBackupBaseNameInput")) $("sheetBackupBaseNameInput").onchange = () => { collectAdminSettings(); renderSheetBackupStatus(); scheduleSave("admin"); };
+  if ($("chooseSheetBackupFolderBtn")) $("chooseSheetBackupFolderBtn").onclick = () => chooseSheetBackupFolder().catch((err) => alert(`选择表格备份文件夹失败：${err.message}`));
+  if ($("sheetBackupNowBtn")) $("sheetBackupNowBtn").onclick = async () => {
+    if ($("sheetBackupToggle")) $("sheetBackupToggle").checked = true;
+    collectAdminSettings();
+    renderSheetBackupStatus();
+    persistLocal();
+    await backupSheets(false);
+    scheduleSave("admin");
+  };
   $("backupCleanupToggle").onchange = () => { collectAdminSettings(); scheduleSave("admin"); };
   $("checkinOptionsInput").onchange = () => { collectAdminSettings(); renderCheckins(currentRecord().checkins || {}); renderOverview(); scheduleSave("admin"); };
   $("passMessagesInput").onchange = () => { collectAdminSettings(); scheduleSave("admin"); };

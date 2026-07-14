@@ -472,7 +472,14 @@
               <label for="adminPasswordInput">新密码</label>
               <input id="adminPasswordInput" type="password" placeholder="留空则不修改">
               <label for="sheetBackupToggle">表格备份</label>
-              <label class="switch-light"><input id="sheetBackupToggle" type="checkbox"> 提交后自动更新 3 个月表格</label>
+              <label class="switch-light"><input id="sheetBackupToggle" type="checkbox"> 提交后自动写固定最新版和每日归档</label>
+              <label for="sheetBackupBaseNameInput">备份固定名</label>
+              <div class="cloud-endpoint-row compact-row">
+                <input id="sheetBackupBaseNameInput" type="text" placeholder="daily_report">
+                <button id="chooseSheetBackupFolderBtn" type="button">选择表格备份文件夹</button>
+                <button id="sheetBackupNowBtn" type="button">立即自动备份</button>
+              </div>
+              <label></label><span class="hint" id="sheetBackupFolderStatus">未选择表格备份文件夹</span>
               <label for="backupCleanupToggle">本地清理</label>
               <label class="switch-light"><input id="backupCleanupToggle" type="checkbox"> 自动清理小备份，保留周/月重要备份</label>
             </div>
