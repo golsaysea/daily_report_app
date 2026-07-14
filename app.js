@@ -5181,22 +5181,22 @@ function xlsxStylesXml() {
   <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
   <cellXfs count="18">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
-    ${xf(2, 1, "center", true)}
     ${xf(3, 1, "center", true)}
-    ${xf(4, 2)}
-    ${xf(5)}
-    ${xf(6, 2)}
-    ${xf(7)}
+    ${xf(4, 1, "center", true)}
+    ${xf(5, 2)}
+    ${xf(6)}
+    ${xf(7, 2)}
     ${xf(8)}
     ${xf(9)}
-    ${xf(10, 0, "left", false)}
-    ${xf(11, 2, "center", true)}
-    ${xf(12, 1, "center", true)}
-    ${xf(13, 2, "center", true)}
+    ${xf(10)}
+    ${xf(11, 0, "left", true)}
+    ${xf(12, 2, "center", true)}
+    ${xf(13, 1, "center", true)}
     ${xf(14, 2, "center", true)}
-    ${xf(15)}
-    ${xf(16, 2)}
-    ${xf(9, 3)}
+    ${xf(15, 2, "center", true)}
+    ${xf(16)}
+    ${xf(17, 2)}
+    ${xf(10, 3)}
     ${xf(2)}
   </cellXfs>
 </styleSheet>`;
