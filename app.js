@@ -5948,22 +5948,14 @@ function importIsMetadataHeader(label) {
     "全组完成", "全组定额", "全组差额"
   ]).has(key);
 }
-function importEnsureItem(target, itemName, stats) {
+function importEnsureItem(target, itemName, stats, sourceRules = null, sourceProductRules = null) {
   const name = importCellText(itemName);
   if (!name || importIsMetadataHeader(name)) return "";
   if (target.rules[name] === undefined) {
-    target.rules[name] = data.rules?.[name] ?? 1;
-    target.productRules[name] = data.productRules?.[name] || defaultProductRuleFor(name);
+    target.rules[name] = data.rules?.[name] ?? sourceRules?.[name] ?? 1;
+    target.productRules[name] = data.productRules?.[name] || sourceProductRules?.[name] || defaultProductRuleFor(name);
     stats.items += 1;
   }
-  Object.keys(target.groupItems || {}).forEach((group) => {
-    if (!Array.isArray(target.groupItems[group])) target.groupItems[group] = Object.keys(target.rules);
-    if (!target.groupItems[group].includes(name)) target.groupItems[group].push(name);
-  });
-  Object.keys(target.memberItems || {}).forEach((member) => {
-    if (!Array.isArray(target.memberItems[member])) target.memberItems[member] = Object.keys(target.rules);
-    if (!target.memberItems[member].includes(name)) target.memberItems[member].push(name);
-  });
   return name;
 }
 function importEnsureMember(target, member, group, stats) {
@@ -6064,7 +6056,7 @@ function importApplyRecord(target, stats, record) {
   }
   const items = {};
   Object.entries(rawItems).forEach(([name, value]) => {
-    const itemName = importEnsureItem(target, name, stats);
+    const itemName = importEnsureItem(target, name, stats, record.sourceRules, record.sourceProductRules);
     if (itemName) items[itemName] = value;
   });
   const totals = mergedEntryTotals(items, target.rules || {});
@@ -6315,6 +6307,25 @@ async function fileToWorkbookSheets(file) {
   if (/\.xlsx$/i.test(name)) return xlsxWorkbookSheets(file);
   return textWorkbookSheets(await file.text(), name);
 }
+function importJsonBackupToData(sourceData) {
+  const backup = normalize(sourceData);
+  const target = normalize(data);
+  const stats = { records: 0, members: 0, items: 0, checkins: 0, skipped: 0, emptyRows: 0, unchanged: 0, seenRecordKeys: new Set() };
+  target.dailyQuotas = mergeDailyQuotas(backup.dailyQuotas, target.dailyQuotas, "admin");
+  target.monthlyPlans = mergeMonthlyPlans(backup.monthlyPlans, target.monthlyPlans);
+  target.freeTable = mergeFreeTable(backup.freeTable, target.freeTable);
+  target.fbSpecialties = mergeFbSpecialties(backup.fbSpecialties, target.fbSpecialties);
+  target.checkinOptions = normalizeCheckinOptions([...(data.checkinOptions || []), ...(backup.checkinOptions || [])]);
+  Object.entries(backup.records || {}).forEach(([, record]) => {
+    importApplyRecord(target, stats, {
+      ...record,
+      group: backup.memberGroups?.[record.member] || record.group || "",
+      sourceRules: backup.rules || {},
+      sourceProductRules: backup.productRules || {}
+    });
+  });
+  return { data: normalize(target), stats };
+}
 function importWorkbookToData(sheets) {
   const target = normalize(data);
   const stats = { records: 0, members: 0, items: 0, checkins: 0, skipped: 0, emptyRows: 0, unchanged: 0, seenRecordKeys: new Set() };
@@ -6330,13 +6341,16 @@ async function importData(file) {
     if (!file) return;
     if (/\.json$/i.test(file.name || "")) {
       const text = await file.text();
-      createBackup("导入 JSON 前备份");
-      data = normalize(JSON.parse(String(text || "{}")));
+      const result = importJsonBackupToData(JSON.parse(String(text || "{}")));
+      const confirmed = confirm(`可从 JSON 备份安全补充 ${result.stats.records} 条记录、${result.stats.checkins} 个打卡、${result.stats.members} 个新成员、${result.stats.items} 个缺失项目。\n\n当前项目分类、分组项目勾选、成员项目配置会以现在软件里的最新设置为准，不会被旧备份覆盖或删除。\n\n确定合并导入吗？导入前会自动备份当前数据。`);
+      if (!confirmed) return;
+      createBackup("JSON 安全合并导入前备份");
+      data = result.data;
     } else {
       const sheets = await fileToWorkbookSheets(file);
       const result = importWorkbookToData(sheets);
       if (!result.stats.records) throw new Error("没有识别到可恢复的每日记录。请在 Google 表格里切到“全部记录”工作表，下载 CSV 后再导入。");
-      const confirmed = confirm(`可补充 ${result.stats.records} 条记录、${result.stats.checkins} 个打卡、${result.stats.members} 个新成员、${result.stats.items} 个新项目。已自动跳过 ${result.stats.emptyRows || 0} 条空白/全0行，保留 ${result.stats.unchanged || 0} 条已有数据。\n\n确定合并导入到当前日记软件吗？导入前会自动备份当前数据。`);
+      const confirmed = confirm(`可补充 ${result.stats.records} 条记录、${result.stats.checkins} 个打卡、${result.stats.members} 个新成员、${result.stats.items} 个新项目。已自动跳过 ${result.stats.emptyRows || 0} 条空白/全0行，保留 ${result.stats.unchanged || 0} 条已有数据。\n\n当前项目分类、分组项目勾选、成员项目配置会以现在软件里的最新设置为准，不会被旧表格覆盖或删除。\n\n确定合并导入到当前日记软件吗？导入前会自动备份当前数据。`);
       if (!confirmed) return;
       createBackup("表格恢复导入前备份");
       data = result.data;
