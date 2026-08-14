@@ -66,6 +66,7 @@
             </div>
             <div class="metric"><span>成员</span><strong id="memberCard">成员A</strong></div>
             <div class="metric quota-edit"><span>今日定额</span><strong><input id="dailyQuotaInput" type="number" step="0.01" min="0" placeholder="自动"></strong></div>
+            <div class="metric quota-edit duty-hours-edit"><span>尽本分时长</span><strong><input id="dutyHoursInput" type="number" step="0.01" min="0" placeholder="小时"></strong></div>
             <div class="metric"><span>原始</span><strong id="rawTotal">0</strong></div>
             <div class="metric"><span>工作量</span><strong id="weightedTotal">0</strong></div>
             <div class="metric"><span>视频成品</span><strong id="videoProductTotal">0</strong></div>
@@ -239,7 +240,7 @@
           <section class="panel">
             <div class="panel-head"><h2>小组记录总览</h2><span class="hint" id="historyCount"></span></div>
             <table>
-                <thead><tr><th>日期</th><th>成员</th><th>原始</th><th>工作量</th><th>状态</th><th>备注</th></tr></thead>
+                <thead><tr><th>日期</th><th>成员</th><th>原始</th><th>工作量</th><th>尽本分时长</th><th>状态</th><th>备注</th></tr></thead>
               <tbody id="historyBody"></tbody>
             </table>
           </section>
