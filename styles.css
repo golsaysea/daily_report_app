@@ -255,7 +255,7 @@ tr:last-child td { border-bottom: 0; }
 .config-head { color: var(--muted); font-size: 12px; font-weight: 900; padding: 0 8px; margin-bottom: 6px; }
 .quota-edit input { width: 100%; min-width: 120px; border: 0; background: transparent; font: inherit; font-weight: 900; color: inherit; outline: 0; }
 .quota-date-grid { margin-bottom: 12px; }
-.member-group-row { display: grid; grid-template-columns: 24px minmax(120px, 1fr) 150px 38px 38px 38px; gap: 8px; align-items: center; margin-bottom: 8px; }
+.member-group-row { display: grid; grid-template-columns: 24px minmax(120px, 1fr) minmax(120px, .85fr) 150px 38px 38px 38px; gap: 8px; align-items: center; margin-bottom: 8px; }
 .rule-admin-tools, .member-admin-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; }
 .rule-admin-tools button, .member-admin-tools button { min-height: 34px; }
 .member-row-check { display: flex; align-items: center; justify-content: center; min-height: 34px; }
@@ -293,13 +293,21 @@ tr:last-child td { border-bottom: 0; }
 .overview-rate-card small { display: block; padding: 0 12px 10px 28px; color: var(--muted); font-weight: 900; }
 .member-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
 .overview-group { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 8px; background: #fbfcf8; padding: 10px; box-shadow: var(--shadow-soft); }
-.overview-group summary { cursor: pointer; display: grid; grid-template-columns: auto minmax(140px, 1fr) auto auto; align-items: center; gap: 10px; font-weight: 900; list-style: none; }
-.overview-group summary::before { content: "▶"; color: var(--green); transition: transform .16s ease; }
-.overview-group[open] summary::before { transform: rotate(90deg); }
-.overview-group summary span { flex: 1; }
+.overview-group > summary { cursor: pointer; display: grid; grid-template-columns: auto minmax(140px, 1fr) auto auto; align-items: center; gap: 10px; font-weight: 900; list-style: none; }
+.overview-group > summary::before { content: "▶"; color: var(--green); transition: transform .16s ease; }
+.overview-group[open] > summary::before { transform: rotate(90deg); }
+.overview-group > summary span { flex: 1; }
 .overview-export-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 .overview-export-btn { flex: 0 0 auto; min-height: 30px; padding: 5px 9px; font-size: 12px; }
-.overview-group > .member-grid { margin-top: 10px; }
+.overview-group > .member-grid, .overview-group > .overview-subgroup-list { margin-top: 10px; }
+.overview-subgroup-list { display: grid; gap: 10px; }
+.overview-subgroup { border: 1px solid #d5e2cc; border-radius: 8px; background: #f7faf4; padding: 8px; }
+.overview-subgroup > summary { cursor: pointer; display: grid; grid-template-columns: auto minmax(140px, 1fr); align-items: center; gap: 9px; font-weight: 900; list-style: none; }
+.overview-subgroup > summary::before { content: "▶"; color: #4f8d5a; transition: transform .16s ease; }
+.overview-subgroup[open] > summary::before { transform: rotate(90deg); }
+.overview-subgroup > summary strong { justify-self: end; text-align: right; }
+.overview-subgroup > .member-grid { margin-top: 8px; }
+.subgroup-pill { justify-self: start; border: 1px solid #c5d8ba; border-radius: 999px; background: #eef6ea; color: #315d42; padding: 4px 8px; font-size: 12px; font-weight: 900; }
 .person-card { border: 1px solid var(--line); border-radius: 8px; background: #fbfcf8; padding: 12px; display: grid; gap: 9px; box-shadow: var(--shadow-soft); }
 .person-card { cursor: pointer; }
 .person-card.complete { border-color: #7bc6a1; background: #edfff7; }
@@ -464,6 +472,6 @@ tr:last-child td { border-bottom: 0; }
   .main { padding: 12px; }
   .topbar { padding: 12px; }
   .overview-hero { align-items: stretch; flex-direction: column; }
-  .overview-group summary { grid-template-columns: auto 1fr; }
-  .overview-group summary strong, .overview-export-actions { grid-column: 2; justify-content: flex-start; }
+  .overview-group > summary { grid-template-columns: auto 1fr; }
+  .overview-group > summary strong, .overview-export-actions, .overview-subgroup > summary strong { grid-column: 2; justify-content: flex-start; justify-self: start; text-align: left; }
 }

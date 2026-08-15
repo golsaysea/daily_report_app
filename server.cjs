@@ -17,6 +17,7 @@ const defaultData = {
   members: ["成员A"],
   groups: ["1组"],
   memberGroups: { "成员A": "1组" },
+  memberSubgroups: {},
   groupItems: {},
   memberItems: {},
   memberQuotas: {},
@@ -85,6 +86,7 @@ function normalize(source) {
   data.groups = Array.isArray(data.groups) && data.groups.length ? data.groups.map(String) : ["1组"];
   data.rules = data.rules && typeof data.rules === "object" ? data.rules : clone(defaultData.rules);
   data.memberGroups = data.memberGroups && typeof data.memberGroups === "object" ? data.memberGroups : {};
+  data.memberSubgroups = data.memberSubgroups && typeof data.memberSubgroups === "object" ? data.memberSubgroups : {};
   data.groupItems = data.groupItems && typeof data.groupItems === "object" ? data.groupItems : {};
   data.memberItems = data.memberItems && typeof data.memberItems === "object" ? data.memberItems : {};
   data.memberQuotas = data.memberQuotas && typeof data.memberQuotas === "object" ? data.memberQuotas : {};

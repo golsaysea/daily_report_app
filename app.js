@@ -7,6 +7,7 @@ const defaultData = {
   members: ["成员A"],
   groups: ["1组"],
   memberGroups: { "成员A": "1组" },
+  memberSubgroups: {},
   groupItems: {},
   memberItems: {},
   memberQuotas: {},
@@ -162,6 +163,7 @@ function compactCloudSyncData(mode = "records") {
     members: data.members,
     groups: data.groups,
     memberGroups: data.memberGroups,
+    memberSubgroups: data.memberSubgroups,
     groupItems: data.groupItems,
     memberItems: data.memberItems,
     memberQuotas: data.memberQuotas,
@@ -424,6 +426,12 @@ function normalize(source) {
   const members = Array.isArray(loaded.members) && loaded.members.length ? loaded.members.map(String) : ["成员A"];
   const groups = Array.isArray(loaded.groups) && loaded.groups.length ? loaded.groups.map(String) : ["1组"];
   const memberGroups = { ...(loaded.memberGroups || {}) };
+  const memberSubgroups = {};
+  Object.entries(loaded.memberSubgroups && typeof loaded.memberSubgroups === "object" ? loaded.memberSubgroups : {}).forEach(([member, subgroup]) => {
+    const name = String(member || "").trim();
+    const value = String(subgroup || "").trim();
+    if (name && value) memberSubgroups[name] = value;
+  });
   const groupItems = { ...(loaded.groupItems || {}) };
   const memberItems = { ...(loaded.memberItems || {}) };
   members.forEach((name) => {
@@ -460,6 +468,7 @@ function normalize(source) {
     members,
     groups,
     memberGroups,
+    memberSubgroups,
     groupItems,
     memberItems,
     memberQuotas,
@@ -725,6 +734,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.members = clone(local.members);
     merged.groups = clone(local.groups || []);
     merged.memberGroups = clone(local.memberGroups || {});
+    merged.memberSubgroups = clone(local.memberSubgroups || {});
     merged.groupItems = clone(local.groupItems || {});
     merged.memberItems = clone(local.memberItems || {});
     merged.memberQuotas = clone(local.memberQuotas || {});
@@ -752,6 +762,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.members = clone(remote.members || local.members);
     merged.groups = clone(remote.groups || local.groups || ["1组"]);
     merged.memberGroups = clone(remote.memberGroups || local.memberGroups || {});
+    merged.memberSubgroups = clone(remote.memberSubgroups || local.memberSubgroups || {});
     merged.groupItems = clone(remote.groupItems || local.groupItems || {});
     merged.memberItems = clone(remote.memberItems || local.memberItems || {});
     merged.memberQuotas = clone(remote.memberQuotas || local.memberQuotas || {});
@@ -791,6 +802,7 @@ function mergeSummaryData(baseSource, sourceData) {
     members: Array.from(new Set([...base.members, ...source.members])),
     groups: Array.from(new Set([...base.groups, ...source.groups])),
     memberGroups: { ...base.memberGroups, ...source.memberGroups },
+    memberSubgroups: { ...base.memberSubgroups, ...source.memberSubgroups },
     groupItems: { ...base.groupItems, ...source.groupItems },
     memberItems: { ...base.memberItems, ...source.memberItems },
     memberQuotas: { ...base.memberQuotas, ...source.memberQuotas },
@@ -821,6 +833,7 @@ function mergeAdminCenterData(baseSource, sourceData) {
     members: Array.from(new Set([...base.members, ...source.members])),
     groups: Array.from(new Set([...base.groups, ...source.groups])),
     memberGroups: { ...source.memberGroups, ...base.memberGroups },
+    memberSubgroups: { ...source.memberSubgroups, ...base.memberSubgroups },
     groupItems: { ...source.groupItems, ...base.groupItems },
     memberItems: { ...source.memberItems, ...base.memberItems },
     memberQuotas: { ...source.memberQuotas, ...base.memberQuotas },
@@ -846,6 +859,7 @@ function makeEmptySummary(seed = data) {
   empty.members = [];
   empty.groups = [];
   empty.memberGroups = {};
+  empty.memberSubgroups = {};
   empty.groupItems = {};
   empty.memberItems = {};
   empty.memberQuotas = {};
@@ -885,6 +899,7 @@ function scopedSourceData(sourceData, label, existingMembers = new Set()) {
     scoped.members.push(nextMember);
     const sourceGroup = source.memberGroups?.[member] || source.groups[0] || "未分组";
     scoped.memberGroups[nextMember] = groupMap[sourceGroup] || `${sourceLabel} / ${sourceGroup}`;
+    if (source.memberSubgroups?.[member]) scoped.memberSubgroups[nextMember] = source.memberSubgroups[member];
     if (source.memberItems?.[member]) scoped.memberItems[nextMember] = clone(source.memberItems[member]);
     if (source.memberQuotas?.[member] !== undefined) scoped.memberQuotas[nextMember] = source.memberQuotas[member];
     if (source.memberCompleteQuotas?.[member] !== undefined) scoped.memberCompleteQuotas[nextMember] = source.memberCompleteQuotas[member];
@@ -1868,6 +1883,51 @@ function reportMembers(report = reportData()) {
     if (ai >= 0) return -1;
     if (bi >= 0) return 1;
     return String(a).localeCompare(String(b), "zh-CN");
+  });
+}
+function memberSubgroup(member, report = reportData()) {
+  const subgroup = String(report.memberSubgroups?.[member] || "").trim();
+  return subgroup || "未分队";
+}
+function subgroupSortValue(name) {
+  return name === "未分队" ? "~~~~" : String(name || "");
+}
+function groupRowsBySubgroup(rows = []) {
+  const map = new Map();
+  rows.forEach((row) => {
+    const name = String(row.subgroup || "未分队").trim() || "未分队";
+    if (!map.has(name)) map.set(name, []);
+    map.get(name).push(row);
+  });
+  return Array.from(map, ([name, subgroupRows]) => ({ name, rows: subgroupRows })).sort((a, b) => {
+    const diff = subgroupSortValue(a.name).localeCompare(subgroupSortValue(b.name), "zh-CN");
+    return diff || a.name.localeCompare(b.name, "zh-CN");
+  });
+}
+function summarizeOverviewRows(rows = []) {
+  const productTotal = rows.reduce((sum, row) => sum + Number(row.productTotal || 0), 0);
+  const quota = rows.reduce((sum, row) => sum + Number(row.quota || 0), 0);
+  const completeQuota = rows.reduce((sum, row) => sum + Number(row.completeQuota || row.quota || 0), 0);
+  return {
+    raw: rows.reduce((sum, row) => sum + Number(row.raw || 0), 0),
+    weighted: rows.reduce((sum, row) => sum + Number(row.weighted || 0), 0),
+    productTotal,
+    quota,
+    completeQuota,
+    dutyHours: rows.reduce((sum, row) => sum + Number(row.dutyHours || 0), 0),
+    video: rows.reduce((sum, row) => sum + Number(row.video || 0), 0),
+    ai: rows.reduce((sum, row) => sum + Number(row.ai || 0), 0),
+    diff: productTotal - quota,
+    completeDiff: productTotal - completeQuota,
+    status: quotaStatusFromTotals(productTotal, quota, completeQuota)
+  };
+}
+function overviewSubgroupBriefLines(rows = []) {
+  const groups = groupRowsBySubgroup(rows);
+  if (!groups.length) return ["   暂无二级小组数据。"];
+  return groups.map(({ name, rows: subgroupRows }) => {
+    const summary = summarizeOverviewRows(subgroupRows);
+    return `   ${name}：${summary.status}｜${subgroupRows.length}人｜一级定额 ${fmt(summary.quota)}｜完全定额 ${fmt(summary.completeQuota)}｜成品量 ${fmt(summary.productTotal)}｜一级差额 ${signedTotalText(summary.diff)}｜完全差额 ${signedTotalText(summary.completeDiff)}｜换算工作量 ${fmt(summary.weighted)}｜尽本分 ${fmtDutyHours(summary.dutyHours)}`;
   });
 }
 function membersForGroupValue(group, report = reportData()) {
@@ -2884,12 +2944,13 @@ function renderMemberQuotas() {
 function renderMemberGroups() {
   const visibleMembers = reportMembers(data);
   const configured = new Set(data.members || []);
+  if (!data.memberSubgroups || typeof data.memberSubgroups !== "object") data.memberSubgroups = {};
   const recordOnlyCount = visibleMembers.filter((name) => !configured.has(name)).length;
   const toolsHtml = `
     <div class="member-admin-tools">
       <button type="button" data-hide-selected-members>隐藏勾选成员</button>
       ${recordOnlyCount ? `<button type="button" data-select-record-members>勾选记录成员 · ${recordOnlyCount}</button>` : ""}
-      <span class="hint">隐藏后不参与侧边栏、整体预览和混合表格，历史记录仍保留。</span>
+      <span class="hint">二级小组可填 A队、代培组、预备组长；隐藏后不参与侧边栏、整体预览和混合表格，历史记录仍保留。</span>
     </div>
   `;
   const groupHtml = data.groups.map((group) => {
@@ -2904,10 +2965,12 @@ function renderMemberGroups() {
           const index = data.members.indexOf(name);
           const isConfigured = index >= 0;
           const groupValue = data.memberGroups?.[name] || data.groups[0] || "";
+          const subgroupValue = data.memberSubgroups?.[name] || "";
           return `
             <div class="member-group-row ${isConfigured ? "" : "record-only-member"}">
               <label class="member-row-check" title="勾选后可批量隐藏"><input type="checkbox" data-member-select="${escapeAttr(name)}"></label>
               <input value="${escapeAttr(name)}" data-member-name="${escapeAttr(name)}" aria-label="成员">
+              <input value="${escapeAttr(subgroupValue)}" data-member-subgroup="${escapeAttr(name)}" placeholder="二级小组/小队" aria-label="二级小组">
               <select data-member-group="${escapeAttr(name)}">
                 ${data.groups.map((item) => `<option value="${escapeAttr(item)}" ${item === groupValue ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}
               </select>
@@ -2928,11 +2991,13 @@ function renderMemberGroups() {
         <summary><span>隐藏成员 · ${hidden.length}</span><span class="hint">不参与侧边栏、整体预览和混合表格</span></summary>
         ${hidden.map(({ member, hiddenAt }) => {
           const group = data.memberGroups?.[member] || "未分组";
+          const subgroup = data.memberSubgroups?.[member] || "未分队";
           const date = hiddenAt && hiddenAt !== true ? String(hiddenAt).slice(0, 10) : "已隐藏";
           return `
             <div class="member-group-row hidden-member-row">
               <span></span>
               <input value="${escapeAttr(member)}" aria-label="隐藏成员" disabled>
+              <span class="hint">${escapeHtml(subgroup)}</span>
               <span class="hint">${escapeHtml(group)} · ${escapeHtml(date)}</span>
               <span></span>
               <span></span>
@@ -2951,6 +3016,17 @@ function renderMemberGroups() {
   });
   $("memberGroupBox").querySelectorAll("input[data-member-name]").forEach((input) => {
     input.onchange = () => renameMember(input.dataset.memberName, input.value.trim());
+  });
+  $("memberGroupBox").querySelectorAll("input[data-member-subgroup]").forEach((input) => {
+    input.oninput = () => {
+      if (!data.memberSubgroups || typeof data.memberSubgroups !== "object") data.memberSubgroups = {};
+      const member = input.dataset.memberSubgroup;
+      const value = input.value.trim();
+      if (value) data.memberSubgroups[member] = value;
+      else delete data.memberSubgroups[member];
+      renderOverview();
+      scheduleSave("admin");
+    };
   });
   $("memberGroupBox").querySelectorAll("select[data-member-group]").forEach((select) => {
     select.onchange = () => {
@@ -3137,6 +3213,10 @@ function renameMember(oldName, newName) {
     data.memberGroups[newName] = data.memberGroups[oldName];
     delete data.memberGroups[oldName];
   }
+  if (data.memberSubgroups?.[oldName] !== undefined) {
+    data.memberSubgroups[newName] = data.memberSubgroups[oldName];
+    delete data.memberSubgroups[oldName];
+  }
   if (data.memberItems[oldName] !== undefined) {
     data.memberItems[newName] = data.memberItems[oldName];
     delete data.memberItems[oldName];
@@ -3280,6 +3360,7 @@ function aggregateMemberRange(member, days, report, itemNames) {
   const rate = rateBase > 0 ? Math.min(100, Math.round((productTotal / rateBase) * 100)) : 100;
   return {
     member,
+    subgroup: memberSubgroup(member, report),
     records,
     items,
     raw,
@@ -3483,7 +3564,7 @@ function overviewGroupBriefLine(row, itemNames) {
   const status = row.status || quotaStatusFromTotals(row.productTotal || 0, row.quota || 0, row.completeQuota || row.quota || 0);
   const note = String(row.note || "").trim();
   const parts = [
-    `${row.member}：${status}`,
+    `${row.member}（${row.subgroup || "未分队"}）：${status}`,
     `一级定额 ${fmt(row.quota)}`,
     `完全定额 ${fmt(row.completeQuota || row.quota || 0)}`,
     `成品量 ${fmt(row.productTotal || 0)}`,
@@ -3500,7 +3581,7 @@ function overviewGroupBriefReasonText(row, itemNames) {
   const status = row.status || quotaStatusFromTotals(row.productTotal || 0, row.quota || 0, row.completeQuota || row.quota || 0);
   const note = String(row.note || "").trim();
   const lines = [
-    `${row.member}：${status}`,
+    `${row.member}（${row.subgroup || "未分队"}）：${status}`,
     `   一级定额：${fmt(row.quota)}｜完全定额：${fmt(row.completeQuota || row.quota || 0)}｜成品量：${fmt(row.productTotal || 0)}｜一级差额：${signedTotalText(row.diff)}｜完全差额：${signedTotalText(row.completeDiff ?? ((row.productTotal || 0) - (row.completeQuota || row.quota || 0)))}｜换算工作量：${fmt(row.weighted)}${row.dutyHours ? `｜尽本分时长：${fmtDutyHours(row.dutyHours)}` : ""}`,
     `   项目明细：${overviewGroupBriefItemDetail(row, itemNames)}`
   ];
@@ -3520,6 +3601,7 @@ function buildOverviewGroupBriefTextForRange(group, range, label, report = repor
   const totalDiff = totalProduct - totalQuota;
   const totalStatus = quotaStatusFromTotals(totalProduct, totalQuota, totalCompleteQuota);
   const totalDutyHours = groupRows.reduce((sum, row) => sum + Number(row.dutyHours || 0), 0);
+  const subgroupLines = overviewSubgroupBriefLines(groupRows);
   const detailLines = sortedOverviewGroupRows(groupRows).length
     ? sortedOverviewGroupRows(groupRows).map((row) => overviewGroupBriefReasonText(row, itemNames))
     : ["暂无成员数据。"];
@@ -3536,6 +3618,8 @@ function buildOverviewGroupBriefTextForRange(group, range, label, report = repor
     `一级差额：${totalDiff >= 0 ? "+" : ""}${fmt(totalDiff)}`,
     `完全差额：${signedTotalText(totalProduct - totalCompleteQuota)}`,
     `状态：${totalStatus}`,
+    "二级小组汇总：",
+    ...subgroupLines,
     "成员达标与项目明细：",
     ...detailLines
   ].join("\n");
@@ -3563,12 +3647,14 @@ function overviewGroupBriefRows(group, report = reportData()) {
   const totalDiff = totalProduct - totalQuota;
   const totalStatus = quotaStatusFromTotals(totalProduct, totalQuota, totalCompleteQuota);
   const totalDutyHours = groupRows.reduce((sum, row) => sum + Number(row.dutyHours || 0), 0);
+  const subgroupLines = overviewSubgroupBriefLines(groupRows);
   const reasonLines = sortedOverviewGroupRows(groupRows).length
     ? sortedOverviewGroupRows(groupRows).map((row) => overviewGroupBriefLine(row, itemNames))
     : ["暂无成员数据。"];
+  const noteLines = ["二级小组汇总：", ...subgroupLines, "", "成员达标与项目明细：", ...reasonLines];
   return [
     [styledCell(`${group} ${range.label}报数｜${rangeText(range)}`, "sTitle", { mergeAcross: 11 })],
-    ["小组", "范围", "一级定额", "完全定额", "成品量", "换算工作量", "尽本分时长", "视频成品", "AI成品", "一级差额", "状态", "成员达标与项目明细"].map((label) => styledCell(label, "sHeader")),
+    ["小组", "范围", "一级定额", "完全定额", "成品量", "换算工作量", "尽本分时长", "视频成品", "AI成品", "一级差额", "状态", "二级小组与成员明细"].map((label) => styledCell(label, "sHeader")),
     [
       styledCell(group, "sDate"),
       styledCell(rangeText(range), "sItem"),
@@ -3581,7 +3667,7 @@ function overviewGroupBriefRows(group, report = reportData()) {
       styledCell(totalAiProduct, "sTotal"),
       styledCell(totalDiff, totalDiff >= 0 ? "sDiffGood" : "sDiffBad"),
       styledCell(totalStatus, mixedExportStatusStyle(totalStatus)),
-      styledCell(reasonLines.join("\n"), "sNote")
+      styledCell(noteLines.join("\n"), "sNote")
     ]
   ];
 }
@@ -3592,7 +3678,7 @@ function buildOverviewBriefWorkbook(groups, report = reportData()) {
   });
   return {
     rows: rows.length ? rows : [[styledCell("暂无可导出小组", "sTitle", { mergeAcross: 9 })]],
-    columns: [120, 150, 90, 90, 100, 90, 90, 90, 90, 360]
+    columns: [120, 150, 90, 90, 100, 100, 90, 90, 90, 90, 90, 460]
   };
 }
 function exportOverviewGroupBrief(group) {
@@ -3688,6 +3774,7 @@ function renderOverview() {
         <span>${escapeHtml(row.member)}</span>
         <span class="status ${quotaStatusClass(row.status)}">${quotaStatusShort(row.status)}</span>
       </div>
+      <div class="subgroup-pill">二级小组 ${escapeHtml(row.subgroup || "未分队")}</div>
       <div class="progress" title="${row.rate}%"><span style="--w:${row.rate}%"></span></div>
       <div class="hint">成品量 ${fmt(row.productTotal || 0)} / ${quotaLabel} ${fmt(row.quota)} / 完全 ${fmt(row.completeQuota)}</div>
       <div class="hint">一级差额 ${signedTotalText(row.diff)} · 完全差额 ${signedTotalText(row.completeDiff)}</div>
@@ -3699,22 +3786,31 @@ function renderOverview() {
   `;
   $("overviewGrid").innerHTML = visibleGroups.map((group) => {
     const groupRows = rows.filter((row) => (report.memberGroups?.[row.member] || report.groups[0]) === group);
-    const groupWeighted = groupRows.reduce((sum, row) => sum + row.weighted, 0);
-    const groupProduct = groupRows.reduce((sum, row) => sum + Number(row.productTotal || 0), 0);
-    const groupQuota = groupRows.reduce((sum, row) => sum + row.quota, 0);
-    const groupCompleteQuota = groupRows.reduce((sum, row) => sum + row.completeQuota, 0);
+    const groupSummary = summarizeOverviewRows(groupRows);
+    const subgroupBlocks = groupRowsBySubgroup(groupRows).map(({ name, rows: subgroupRows }) => {
+      const subgroupSummary = summarizeOverviewRows(subgroupRows);
+      return `
+        <details class="overview-subgroup" open>
+          <summary>
+            <span>${escapeHtml(name)} · ${subgroupRows.length} 人</span>
+            <strong>${fmt(subgroupSummary.productTotal)} / ${fmt(subgroupSummary.quota)} / ${fmt(subgroupSummary.completeQuota)}<small> · ${subgroupSummary.status} · 换算 ${fmt(subgroupSummary.weighted)}</small></strong>
+          </summary>
+          <div class="member-grid">${subgroupRows.map(rowCard).join("")}</div>
+        </details>
+      `;
+    }).join("");
     return `
       <details class="overview-group" open>
         <summary>
           <span>${escapeHtml(group)} · ${groupRows.length} 人</span>
-          <strong>${fmt(groupProduct)} / ${fmt(groupQuota)} / ${fmt(groupCompleteQuota)}<small> · 换算 ${fmt(groupWeighted)}</small></strong>
+          <strong>${fmt(groupSummary.productTotal)} / ${fmt(groupSummary.quota)} / ${fmt(groupSummary.completeQuota)}<small> · ${groupSummary.status} · 换算 ${fmt(groupSummary.weighted)}</small></strong>
           <span class="overview-export-actions">
             <button class="overview-export-btn" type="button" data-overview-export-group="${escapeAttr(group)}">表格</button>
             <button class="overview-export-btn" type="button" data-overview-export-text-group="${escapeAttr(group)}">TXT</button>
             <button class="overview-export-btn" type="button" data-overview-copy-text-group="${escapeAttr(group)}">复制</button>
           </span>
         </summary>
-        <div class="member-grid">${groupRows.map(rowCard).join("") || `<div class="hint">这个分组还没有成员。</div>`}</div>
+        <div class="overview-subgroup-list">${subgroupBlocks || `<div class="hint">这个分组还没有成员。</div>`}</div>
       </details>
     `;
   }).join("");
