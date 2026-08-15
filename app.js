@@ -3578,6 +3578,9 @@ function sortedOverviewGroupRows(rows = []) {
     return String(a.member || "").localeCompare(String(b.member || ""), "zh-CN");
   });
 }
+function overviewBriefProductValue(source = {}) {
+  return Number(source.video ?? source.productTotal ?? 0);
+}
 function overviewBriefStatus(productTotal, quota) {
   const total = Number(productTotal || 0);
   const target = Number(quota || 0);
@@ -3590,24 +3593,26 @@ function overviewBriefDiffText(productTotal, quota) {
   return diff > 0 ? `+${fmt(diff)}` : "0";
 }
 function overviewGroupBriefLine(row, itemNames) {
-  const status = overviewBriefStatus(row.productTotal || 0, row.quota || 0);
+  const product = overviewBriefProductValue(row);
+  const status = overviewBriefStatus(product, row.quota || 0);
   const note = String(row.note || "").trim();
   const parts = [
     `${row.member}：${status}`,
     `定额 ${fmt(row.quota)}`,
-    `成品量 ${fmt(row.productTotal || 0)}`,
-    `差额 ${overviewBriefDiffText(row.productTotal || 0, row.quota || 0)}`,
+    `成品量 ${fmt(product)}`,
+    `差额 ${overviewBriefDiffText(product, row.quota || 0)}`,
     `项目 ${overviewGroupBriefItemDetail(row, itemNames)}`,
     note ? `备注 ${note}` : ""
   ].filter(Boolean);
   return parts.join("｜");
 }
 function overviewGroupBriefReasonText(row, itemNames) {
-  const status = overviewBriefStatus(row.productTotal || 0, row.quota || 0);
+  const product = overviewBriefProductValue(row);
+  const status = overviewBriefStatus(product, row.quota || 0);
   const note = String(row.note || "").trim();
   const lines = [
     `${row.member}：${status}`,
-    `   定额：${fmt(row.quota)}｜成品量：${fmt(row.productTotal || 0)}｜差额：${overviewBriefDiffText(row.productTotal || 0, row.quota || 0)}`,
+    `   定额：${fmt(row.quota)}｜成品量：${fmt(product)}｜差额：${overviewBriefDiffText(product, row.quota || 0)}`,
     `   项目明细：${overviewGroupBriefItemDetail(row, itemNames)}`
   ];
   if (note) lines.push(`   备注：${note}`);
@@ -3618,7 +3623,8 @@ function buildOverviewGroupBriefTextForRange(group, range, label, report = repor
   const itemNames = configuredItems();
   const groupRows = membersForGroupValue(group, report).map((member) => aggregateMemberRange(member, days, report, itemNames));
   const summary = summarizeOverviewRows(groupRows);
-  const status = overviewBriefStatus(summary.productTotal, summary.quota);
+  const product = overviewBriefProductValue(summary);
+  const status = overviewBriefStatus(product, summary.quota);
   const detailLines = sortedOverviewGroupRows(groupRows).length
     ? sortedOverviewGroupRows(groupRows).map((row) => overviewGroupBriefReasonText(row, itemNames))
     : ["暂无成员数据。"];
@@ -3626,8 +3632,8 @@ function buildOverviewGroupBriefTextForRange(group, range, label, report = repor
     `${group} ${label}报数`,
     `时间：${rangeText(range)}`,
     `定额：${fmt(summary.quota)}`,
-    `成品量：${fmt(summary.productTotal)}`,
-    `差额：${overviewBriefDiffText(summary.productTotal, summary.quota)}`,
+    `成品量：${fmt(product)}`,
+    `差额：${overviewBriefDiffText(product, summary.quota)}`,
     `状态：${status}`,
     "成员达标与项目明细：",
     ...detailLines
@@ -3648,7 +3654,8 @@ function overviewGroupBriefRows(group, report = reportData()) {
   const itemNames = configuredItems();
   const groupRows = membersForGroupValue(group, report).map((member) => aggregateMemberRange(member, days, report, itemNames));
   const summary = summarizeOverviewRows(groupRows);
-  const status = overviewBriefStatus(summary.productTotal, summary.quota);
+  const product = overviewBriefProductValue(summary);
+  const status = overviewBriefStatus(product, summary.quota);
   const reasonLines = sortedOverviewGroupRows(groupRows).length
     ? sortedOverviewGroupRows(groupRows).map((row) => overviewGroupBriefLine(row, itemNames))
     : ["暂无成员数据。"];
@@ -3659,8 +3666,8 @@ function overviewGroupBriefRows(group, report = reportData()) {
       styledCell(group, "sDate"),
       styledCell(rangeText(range), "sItem"),
       styledCell(summary.quota, "sQuota"),
-      styledCell(summary.productTotal, "sTotal"),
-      styledCell(overviewBriefDiffText(summary.productTotal, summary.quota), status === "达标" ? "sDiffGood" : "sDiffBad"),
+      styledCell(product, "sTotal"),
+      styledCell(overviewBriefDiffText(product, summary.quota), status === "达标" ? "sDiffGood" : "sDiffBad"),
       styledCell(status, mixedExportStatusStyle(status)),
       styledCell(reasonLines.join("\n"), "sNote")
     ]
@@ -3706,7 +3713,8 @@ function overviewRowsPrimaryGroupLabel(rows = [], report = reportData()) {
 }
 function overviewRowsBriefText(title, range, label, rows, itemNames, sourceLabel = "") {
   const summary = summarizeOverviewRows(rows);
-  const status = overviewBriefStatus(summary.productTotal, summary.quota);
+  const product = overviewBriefProductValue(summary);
+  const status = overviewBriefStatus(product, summary.quota);
   const detailLines = sortedOverviewGroupRows(rows).length
     ? sortedOverviewGroupRows(rows).map((row) => overviewGroupBriefReasonText(row, itemNames))
     : ["暂无成员数据。"];
@@ -3714,8 +3722,8 @@ function overviewRowsBriefText(title, range, label, rows, itemNames, sourceLabel
     `${title} ${label}报数`,
     `时间：${rangeText(range)}`,
     `定额：${fmt(summary.quota)}`,
-    `成品量：${fmt(summary.productTotal)}`,
-    `差额：${overviewBriefDiffText(summary.productTotal, summary.quota)}`,
+    `成品量：${fmt(product)}`,
+    `差额：${overviewBriefDiffText(product, summary.quota)}`,
     `状态：${status}`,
     "成员达标与项目明细：",
     ...detailLines
@@ -3723,7 +3731,8 @@ function overviewRowsBriefText(title, range, label, rows, itemNames, sourceLabel
 }
 function overviewRowsBriefRows(title, range, rows, itemNames, sourceLabel = "") {
   const summary = summarizeOverviewRows(rows);
-  const status = overviewBriefStatus(summary.productTotal, summary.quota);
+  const product = overviewBriefProductValue(summary);
+  const status = overviewBriefStatus(product, summary.quota);
   const reasonLines = sortedOverviewGroupRows(rows).length
     ? sortedOverviewGroupRows(rows).map((row) => overviewGroupBriefLine(row, itemNames))
     : ["暂无成员数据。"];
@@ -3734,8 +3743,8 @@ function overviewRowsBriefRows(title, range, rows, itemNames, sourceLabel = "") 
       styledCell(title, "sDate"),
       styledCell(rangeText(range), "sItem"),
       styledCell(summary.quota, "sQuota"),
-      styledCell(summary.productTotal, "sTotal"),
-      styledCell(overviewBriefDiffText(summary.productTotal, summary.quota), status === "达标" ? "sDiffGood" : "sDiffBad"),
+      styledCell(product, "sTotal"),
+      styledCell(overviewBriefDiffText(product, summary.quota), status === "达标" ? "sDiffGood" : "sDiffBad"),
       styledCell(status, mixedExportStatusStyle(status)),
       styledCell(reasonLines.join("\n"), "sNote")
     ]
