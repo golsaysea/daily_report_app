@@ -3801,6 +3801,101 @@ async function copyOverviewSubgroupBriefText(subgroup) {
     showDialog("复制失败", "浏览器没有允许写入剪贴板，可以先用“导出TXT”下载。", "");
   }
 }
+function overviewRankingProduct(row = {}) {
+  return cleanTotalValue(overviewBriefProductValue(row));
+}
+function overviewRankingStatus(product, quota) {
+  return overviewBriefStatus(product, quota);
+}
+function overviewRankingSummary(rows = []) {
+  const summary = summarizeOverviewRows(rows);
+  const product = overviewRankingProduct(summary);
+  const quota = Number(summary.quota || 0);
+  return {
+    product,
+    quota,
+    ai: cleanTotalValue(summary.ai || 0),
+    weighted: cleanTotalValue(summary.weighted || 0),
+    diff: cleanTotalValue(product - quota),
+    status: overviewRankingStatus(product, quota)
+  };
+}
+function overviewRankingScore(entry) {
+  return [
+    Number(entry.product || 0),
+    entry.status === "达标" ? 1 : 0,
+    Number(entry.diff || 0),
+    Number(entry.ai || 0)
+  ];
+}
+function compareOverviewRanking(a, b) {
+  const left = overviewRankingScore(a);
+  const right = overviewRankingScore(b);
+  for (let i = 0; i < left.length; i += 1) {
+    const diff = right[i] - left[i];
+    if (diff) return diff;
+  }
+  return String(a.name || "").localeCompare(String(b.name || ""), "zh-CN");
+}
+function overviewRankingBadgeClass(index) {
+  if (index === 0) return " top-1";
+  if (index === 1) return " top-2";
+  if (index === 2) return " top-3";
+  return "";
+}
+function overviewRankingListHtml(entries, emptyText, type) {
+  if (!entries.length) return `<div class="ranking-empty">${escapeHtml(emptyText)}</div>`;
+  return entries.map((entry, index) => {
+    const passed = entry.status === "达标";
+    const meta = type === "subgroup"
+      ? `${entry.count} 人 · 换算工作量 ${fmt(entry.weighted || 0)}`
+      : `自由编队 ${escapeHtml(entry.subgroup || "未分队")} · 换算工作量 ${fmt(entry.weighted || 0)}`;
+    return `
+      <article class="ranking-row ${passed ? "pass" : "fail"}">
+        <div class="ranking-no${overviewRankingBadgeClass(index)}">${index + 1}</div>
+        <div class="ranking-info">
+          <strong>${escapeHtml(entry.name || "未命名")}</strong>
+          <small>${meta}</small>
+        </div>
+        <div class="ranking-score">
+          <strong>${fmt(entry.product || 0)}</strong>
+          <small>定额 ${fmt(entry.quota || 0)} · 差额 <span class="ranking-diff ${passed ? "good" : "bad"}">${overviewBriefDiffText(entry.product || 0, entry.quota || 0)}</span> · AI ${fmt(entry.ai || 0)}</small>
+        </div>
+        <span class="ranking-status ${passed ? "pass" : "fail"}">${entry.status}</span>
+      </article>
+    `;
+  }).join("");
+}
+function renderOverviewRankings(rows = [], range) {
+  const hint = $("overviewRankingHint");
+  const subgroupList = $("subgroupRankingList");
+  const memberList = $("memberRankingList");
+  if (!hint || !subgroupList || !memberList) return;
+  const subgroupEntries = groupRowsBySubgroup(rows)
+    .map(({ name, rows: subgroupRows }) => ({
+      name,
+      count: subgroupRows.length,
+      ...overviewRankingSummary(subgroupRows)
+    }))
+    .sort(compareOverviewRanking);
+  const memberEntries = rows.map((row) => {
+    const product = overviewRankingProduct(row);
+    const quota = Number(row.quota || 0);
+    return {
+      name: row.member,
+      subgroup: row.subgroup || "未分队",
+      product,
+      quota,
+      ai: cleanTotalValue(row.ai || 0),
+      weighted: cleanTotalValue(row.weighted || 0),
+      diff: cleanTotalValue(product - quota),
+      status: overviewRankingStatus(product, quota)
+    };
+  }).sort(compareOverviewRanking);
+  hint.textContent = `${rangeText(range)} · 按视频成品排序，AI成品仅作参考`;
+  subgroupList.innerHTML = overviewRankingListHtml(subgroupEntries, "当前范围还没有自由编队数据。", "subgroup");
+  memberList.innerHTML = overviewRankingListHtml(memberEntries, "当前范围还没有个人数据。", "member");
+}
 function exportSelectedOverviewBriefs() {
   const report = selectedReportData();
   const groups = withReportData(report, () => selectedOverviewGroups(report));
@@ -3928,6 +4023,7 @@ function renderOverview() {
       </details>
     ` : "";
   $("overviewGrid").innerHTML = primaryGroupHtml + freeSubgroupHtml;
+  renderOverviewRankings(rows, range);
   $("overviewGrid").querySelectorAll("[data-overview-member]").forEach((card) => {
     card.onclick = () => {
       selectOverviewMember(card.dataset.overviewMember, report);
