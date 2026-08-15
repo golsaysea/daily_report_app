@@ -6278,10 +6278,30 @@ function importIsMetadataHeader(label) {
     "全组完成", "全组定额", "全组差额"
   ]).has(key);
 }
-function importEnsureItem(target, itemName, stats, sourceRules = null, sourceProductRules = null) {
+function importKnownRuleName(target, itemName) {
   const name = importCellText(itemName);
   if (!name || importIsMetadataHeader(name)) return "";
-  if (target.rules[name] === undefined) {
+  const rules = target.rules || {};
+  if (rules[name] !== undefined) return name;
+  const key = importHeaderKey(name);
+  const normalizedMatch = Object.keys(rules).find((ruleName) => importHeaderKey(ruleName) === key);
+  if (normalizedMatch) return normalizedMatch;
+  const aliases = {
+    "动画量": ["动画"],
+    "模板": ["模板套数"],
+    "逐句出字": ["逐个出字"],
+    "钩子": ["开场钩子", "简单钩子"],
+    "形式化": ["形式化视频"],
+    "gork视频": ["grok视频", "gork视频"]
+  };
+  const candidates = aliases[name] || aliases[key] || [];
+  return candidates.find((candidate) => rules[candidate] !== undefined) || "";
+}
+function importEnsureItem(target, itemName, stats, sourceRules = null, sourceProductRules = null) {
+  const name = importCellText(itemName);
+  const resolved = importKnownRuleName(target, name);
+  if (!name || importIsMetadataHeader(name)) return "";
+  if (!resolved) {
     if (Array.isArray(stats.skippedItemNames)) {
       if (!stats.skippedItemNames.includes(name)) stats.skippedItemNames.push(name);
       stats.skippedItems = stats.skippedItemNames.length;
@@ -6290,7 +6310,8 @@ function importEnsureItem(target, itemName, stats, sourceRules = null, sourcePro
     }
     return "";
   }
-  return name;
+  if (resolved !== name && stats.mappedItems && typeof stats.mappedItems === "object") stats.mappedItems[name] = resolved;
+  return resolved;
 }
 function importEnsureMember(target, member, group, stats) {
   const name = importCellText(member);
@@ -6790,7 +6811,7 @@ async function fileToWorkbookSheets(file) {
 function importJsonBackupToData(sourceData) {
   const backup = normalize(sourceData);
   const target = normalize(data);
-  const stats = { records: 0, members: 0, newMembers: [], items: 0, skippedItems: 0, skippedItemNames: [], checkins: 0, skipped: 0, emptyRows: 0, unchanged: 0, seenRecordKeys: new Set() };
+  const stats = { records: 0, members: 0, newMembers: [], items: 0, skippedItems: 0, skippedItemNames: [], mappedItems: {}, checkins: 0, skipped: 0, emptyRows: 0, unchanged: 0, seenRecordKeys: new Set() };
   target.dailyQuotas = mergeDailyQuotas(backup.dailyQuotas, target.dailyQuotas, "admin");
   target.monthlyPlans = mergeMonthlyPlans(backup.monthlyPlans, target.monthlyPlans);
   target.freeTable = mergeFreeTable(backup.freeTable, target.freeTable);
@@ -6808,7 +6829,7 @@ function importJsonBackupToData(sourceData) {
 }
 function importWorkbookToData(sheets) {
   const target = normalize(data);
-  const stats = { records: 0, members: 0, newMembers: [], items: 0, skippedItems: 0, skippedItemNames: [], checkins: 0, skipped: 0, emptyRows: 0, unchanged: 0, seenRecordKeys: new Set() };
+  const stats = { records: 0, members: 0, newMembers: [], items: 0, skippedItems: 0, skippedItemNames: [], mappedItems: {}, checkins: 0, skipped: 0, emptyRows: 0, unchanged: 0, seenRecordKeys: new Set() };
   sheets.forEach((sheet) => {
     const rows = (sheet.rows || []).filter((row) => row.some((cell) => importCellText(cell)));
     importRowsFromRecordTable(target, stats, rows);
@@ -6825,6 +6846,12 @@ function importNewMemberConfirmText(stats = {}) {
     const more = names.length > 20 ? ` 等 ${names.length} 人` : "";
     lines.push(`将新增成员：${preview}${more}`);
     lines.push("导入后可在“管理员 > 成员与分组”勾选多余成员并隐藏。");
+  }
+  const mappedItems = stats.mappedItems && typeof stats.mappedItems === "object" ? Object.entries(stats.mappedItems) : [];
+  if (mappedItems.length) {
+    const preview = mappedItems.slice(0, 12).map(([from, to]) => `${from}→${to}`).join("、");
+    const more = mappedItems.length > 12 ? ` 等 ${mappedItems.length} 项` : "";
+    lines.push(`已合并旧项目名：${preview}${more}`);
   }
   const skippedItems = Array.isArray(stats.skippedItemNames) ? stats.skippedItemNames : [];
   if (skippedItems.length) {
