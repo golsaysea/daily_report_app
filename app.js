@@ -6159,11 +6159,24 @@ function importNumber(value) {
   const number = Number(text);
   return Number.isFinite(number) ? number : 0;
 }
+function excelSerialDateKey(value) {
+  const text = importCellText(value).replace(/,/g, "");
+  if (!/^\d{4,5}(?:\.\d+)?$/.test(text)) return "";
+  const serial = Number(text);
+  if (!Number.isFinite(serial) || serial < 20000 || serial > 80000) return "";
+  const date = new Date(Math.round((serial - 25569) * 86400000));
+  if (Number.isNaN(date.getTime())) return "";
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 function normalizeImportedDateKey(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return dateKeyFromDate(value);
   const text = importCellText(value).replace(/[./]/g, "-");
   const match = text.match(/(20\d{2}|19\d{2})-(\d{1,2})-(\d{1,2})/);
-  if (!match) return "";
-  return `${match[1]}-${String(Number(match[2])).padStart(2, "0")}-${String(Number(match[3])).padStart(2, "0")}`;
+  if (match) return `${match[1]}-${String(Number(match[2])).padStart(2, "0")}-${String(Number(match[3])).padStart(2, "0")}`;
+  return excelSerialDateKey(text);
 }
 function importRangeFromText(value) {
   const text = importCellText(value).replace(/[./]/g, "-");
@@ -6466,6 +6479,110 @@ function importMixedDetailRows(target, stats, rows) {
   });
   return imported;
 }
+function importLegacyHeaderSlot(label) {
+  const key = importHeaderKey(label);
+  if (["上午", "早", "早打卡", "上午打卡"].includes(key)) return "morning";
+  if (["下午", "中午", "中", "午", "下午打卡", "中午打卡", "中打卡", "午打卡"].includes(key)) return "noon";
+  if (["晚上", "晚", "晚打卡", "晚上打卡"].includes(key)) return "evening";
+  return "";
+}
+function importLegacyIsMetadataHeader(label) {
+  const key = importHeaderKey(label);
+  if (!key) return true;
+  if (importLegacyHeaderSlot(key)) return true;
+  if (importIsMetadataHeader(label)) return true;
+  return new Set(["没完成的原因", "未完成原因", "没完成原因", "原因", "收获", "日记"]).has(key);
+}
+function importLegacyMemberName(value) {
+  const text = importCellText(value);
+  if (!text || /^\d{1,2}月份?$/.test(text) || normalizeImportedDateKey(text)) return "";
+  if (/^\d+(?:\.\d+)?$/.test(text)) return "";
+  if (/^[|｜]?\s*名字[:：]/.test(text) || /[|｜].*工作量/.test(text)) return "";
+  if (importLegacyIsMetadataHeader(text)) return "";
+  return text;
+}
+function importLegacyMemberBlockStarts(nameRow = [], headerRow = []) {
+  const starts = [];
+  nameRow.forEach((cell, index) => {
+    const member = importLegacyMemberName(cell);
+    if (!member) return;
+    const headerKeys = Array.from({ length: 45 }, (_, offset) => importHeaderKey(headerRow[index + offset]));
+    const hasCheckin = headerKeys.some((key) => importLegacyHeaderSlot(key));
+    const hasMetric = headerKeys.some((key) => ["完成总数", "总完成", "工作量", "定额", "差额"].includes(key));
+    const hasItems = headerKeys.some((key) => key && !importLegacyIsMetadataHeader(key));
+    if (hasCheckin && (hasMetric || hasItems)) starts.push({ member, index });
+  });
+  return starts;
+}
+function importLegacyGroupFromSheetName(sheetName = "") {
+  const text = importCellText(sheetName);
+  if (!text || /^工作表\d+$/.test(text)) return "";
+  return text
+    .replace(/(?:19|20)?\d{2}年.*$/, "")
+    .replace(/\d{1,2}月份?.*$/, "")
+    .replace(/[-_｜|\s]+$/, "")
+    .trim();
+}
+function importLegacyHorizontalRows(target, stats, rows, sheetName = "") {
+  let imported = 0;
+  const group = importLegacyGroupFromSheetName(sheetName);
+  for (let rowIndex = 0; rowIndex < rows.length - 1; rowIndex += 1) {
+    const nameRow = rows[rowIndex] || [];
+    const headerRow = rows[rowIndex + 1] || [];
+    const starts = importLegacyMemberBlockStarts(nameRow, headerRow);
+    if (!starts.length) continue;
+    let sectionEnd = rows.length;
+    for (let index = rowIndex + 2; index < rows.length - 1; index += 1) {
+      if (importLegacyMemberBlockStarts(rows[index] || [], rows[index + 1] || []).length) {
+        sectionEnd = index;
+        break;
+      }
+    }
+    starts.forEach(({ member, index: startIndex }, blockIndex) => {
+      const blockEnd = starts[blockIndex + 1]?.index ?? Math.max(headerRow.length, startIndex + 1);
+      const headerCells = Array.from({ length: Math.max(blockEnd - startIndex, 0) }, (_, offset) => importCellText(headerRow[startIndex + offset]));
+      const offsetFor = (keys) => {
+        const allowed = new Set(keys.map(importHeaderKey));
+        return headerCells.findIndex((label) => allowed.has(importHeaderKey(label)));
+      };
+      const valueAt = (row, keys) => {
+        const offset = offsetFor(Array.isArray(keys) ? keys : [keys]);
+        return offset >= 0 ? row[startIndex + offset] : "";
+      };
+      const itemColumns = headerCells
+        .map((label, offset) => ({ label, offset }))
+        .filter(({ label }) => label && !importLegacyIsMetadataHeader(label));
+      for (let dataRowIndex = rowIndex + 2; dataRowIndex < sectionEnd; dataRowIndex += 1) {
+        const source = rows[dataRowIndex] || [];
+        const date = importDateFromMonthDay(source[0]);
+        if (!date) continue;
+        const items = {};
+        itemColumns.forEach(({ label, offset }) => {
+          items[label] = source[startIndex + offset];
+        });
+        importApplyRecord(target, stats, {
+          date,
+          member,
+          group,
+          items,
+          weighted_total: valueAt(source, ["工作量", "完成总数", "总完成"]),
+          quota_total: valueAt(source, ["定额", "当日定额", "默认定额"]),
+          duty_hours: valueAt(source, ["尽本分时长", "本分时长"]),
+          status: valueAt(source, ["状态"]),
+          note: valueAt(source, ["备注", "没完成的原因", "未完成原因", "没完成原因", "原因"]),
+          checkins: {
+            morning: valueAt(source, ["上午打卡", "早打卡", "上午", "早"]),
+            noon: valueAt(source, ["下午打卡", "中午打卡", "中打卡", "下午", "中午", "中"]),
+            evening: valueAt(source, ["晚上打卡", "晚打卡", "晚上", "晚"])
+          }
+        });
+        imported += 1;
+      }
+    });
+    rowIndex = sectionEnd - 1;
+  }
+  return imported;
+}
 function textWorkbookSheets(text, fileName = "") {
   const source = String(text || "");
   if (/<table[\s>]/i.test(source) && !/<Workbook[\s>]/i.test(source)) {
@@ -6568,15 +6685,41 @@ function xlsxSheetRows(xml, sharedStrings = []) {
     return values;
   });
 }
+function xlsxWorksheetEntries(entries, decoder) {
+  const workbookXml = entries["xl/workbook.xml"] ? decoder.decode(entries["xl/workbook.xml"]) : "";
+  const relsXml = entries["xl/_rels/workbook.xml.rels"] ? decoder.decode(entries["xl/_rels/workbook.xml.rels"]) : "";
+  if (!workbookXml || !relsXml) return [];
+  const relsDoc = new DOMParser().parseFromString(relsXml, "application/xml");
+  const rels = {};
+  Array.from(relsDoc.getElementsByTagNameNS("*", "Relationship")).forEach((rel) => {
+    const id = rel.getAttribute("Id") || "";
+    const target = rel.getAttribute("Target") || "";
+    if (!id || !target) return;
+    const cleanTarget = target.replace(/^\//, "");
+    rels[id] = cleanTarget.startsWith("xl/") ? cleanTarget : `xl/${cleanTarget}`;
+  });
+  const workbookDoc = new DOMParser().parseFromString(workbookXml, "application/xml");
+  return Array.from(workbookDoc.getElementsByTagNameNS("*", "sheet")).map((sheet, index) => {
+    const relId = sheet.getAttribute("r:id") || sheet.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id") || "";
+    return {
+      name: sheet.getAttribute("name") || `工作表${index + 1}`,
+      path: rels[relId] || `xl/worksheets/sheet${index + 1}.xml`
+    };
+  });
+}
 async function xlsxWorkbookSheets(file) {
   const entries = await unzipXlsxEntries(await file.arrayBuffer());
   const decoder = new TextDecoder();
   const sharedXml = entries["xl/sharedStrings.xml"] ? decoder.decode(entries["xl/sharedStrings.xml"]) : "";
   const sharedStrings = sharedXml ? Array.from(new DOMParser().parseFromString(sharedXml, "application/xml").getElementsByTagNameNS("*", "si")).map((si) => Array.from(si.getElementsByTagNameNS("*", "t")).map((node) => node.textContent || "").join("")) : [];
-  return Object.keys(entries)
+  const sheetEntries = xlsxWorksheetEntries(entries, decoder);
+  const fallbackEntries = Object.keys(entries)
     .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(name))
     .sort()
-    .map((name, index) => ({ name: `工作表${index + 1}`, rows: xlsxSheetRows(decoder.decode(entries[name]), sharedStrings) }));
+    .map((path, index) => ({ name: `工作表${index + 1}`, path }));
+  return (sheetEntries.length ? sheetEntries : fallbackEntries)
+    .filter((sheet) => entries[sheet.path])
+    .map((sheet) => ({ name: sheet.name, rows: xlsxSheetRows(decoder.decode(entries[sheet.path]), sharedStrings) }));
 }
 async function fileToWorkbookSheets(file) {
   const name = file.name || "";
@@ -6609,6 +6752,7 @@ function importWorkbookToData(sheets) {
     const rows = (sheet.rows || []).filter((row) => row.some((cell) => importCellText(cell)));
     importRowsFromRecordTable(target, stats, rows);
     importMixedDetailRows(target, stats, rows);
+    importLegacyHorizontalRows(target, stats, rows, sheet.name || "");
   });
   return { data: normalize(target), stats };
 }
