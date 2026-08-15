@@ -407,22 +407,7 @@ function normalizeRecordMap(records = {}, rules = defaultData.rules) {
   return normalized;
 }
 function addRecordItemsToRules(records = {}, rules = {}, memberGroups = {}, groups = [], groupItems = {}) {
-  const discovered = [];
-  Object.values(records || {}).forEach((record) => {
-    Object.keys(record?.items || {}).forEach((rawName) => {
-      const name = String(rawName || "").trim();
-      if (!name) return;
-      const existed = rules[name] !== undefined;
-      if (!existed) {
-        rules[name] = Number(defaultData.rules?.[name] ?? 1);
-        discovered.push({ name, group: memberGroups?.[record.member] || groups[0] || "" });
-      }
-    });
-  });
-  discovered.forEach(({ name, group }) => {
-    if (!group || !Array.isArray(groupItems[group]) || groupItems[group].includes(name)) return;
-    groupItems[group].push(name);
-  });
+  // Keep project configuration admin-owned. Old record fields should not recreate removed projects.
 }
 function normalize(source) {
   const loaded = source || {};
@@ -618,8 +603,9 @@ function mergeRecordItems(aItems = {}, bItems = {}, aRecord = {}, bRecord = {}, 
   return merged;
 }
 function mergedEntryTotals(items, rules = {}) {
-  const raw = Object.values(items || {}).reduce((sum, amount) => sum + Number(amount || 0), 0);
-  const weighted = Object.entries(items || {}).reduce((sum, [name, amount]) => {
+  const entries = Object.entries(items || {}).filter(([name]) => rules?.[name] !== undefined);
+  const raw = entries.reduce((sum, [, amount]) => sum + Number(amount || 0), 0);
+  const weighted = entries.reduce((sum, [name, amount]) => {
     const weight = Number(rules?.[name] ?? 1);
     return sum + Number(amount || 0) * (Number.isFinite(weight) ? weight : 1);
   }, 0);
@@ -2390,16 +2376,18 @@ function parseEntry(text) {
     const name = match[1].trim();
     items[name] = (items[name] || 0) + Number(match[2]);
   });
-  const raw = Object.values(items).reduce((sum, amount) => sum + amount, 0);
-  const weighted = Object.entries(items).reduce((sum, [name, amount]) => {
+  const knownEntries = Object.entries(items).filter(([name]) => data.rules[name] !== undefined);
+  const raw = knownEntries.reduce((sum, [, amount]) => sum + amount, 0);
+  const weighted = knownEntries.reduce((sum, [name, amount]) => {
     const weight = Number(data.rules[name] ?? 1);
     return sum + amount * (Number.isFinite(weight) ? weight : 1);
   }, 0);
   return { items, raw, weighted };
 }
 function entryTotals(items) {
-  const raw = Object.values(items).reduce((sum, amount) => sum + Number(amount || 0), 0);
-  const weighted = Object.entries(items).reduce((sum, [name, amount]) => {
+  const knownEntries = Object.entries(items).filter(([name]) => data.rules[name] !== undefined);
+  const raw = knownEntries.reduce((sum, [, amount]) => sum + Number(amount || 0), 0);
+  const weighted = knownEntries.reduce((sum, [name, amount]) => {
     const weight = Number(data.rules[name] ?? 1);
     return sum + Number(amount || 0) * (Number.isFinite(weight) ? weight : 1);
   }, 0);
@@ -2605,9 +2593,35 @@ function memberTodayStatus(name) {
   if (rec.status === "不达标") return "未达";
   return "待审";
 }
+function deleteRules(names = []) {
+  const unique = Array.from(new Set(names.map((name) => String(name || "").trim()).filter((name) => data.rules[name] !== undefined)));
+  if (!unique.length) return alert("请先勾选要删除的项目。");
+  if (!confirm(`确定删除 ${unique.length} 个项目？这些项目会从今日报数、整体预览和混合表格中隐藏，历史记录仍保留。`)) return;
+  createBackup(`删除项目 ${unique.join(", ")} 前备份`);
+  unique.forEach((name) => {
+    delete data.rules[name];
+    delete data.productRules?.[name];
+    Object.keys(data.groupItems || {}).forEach((group) => {
+      data.groupItems[group] = (data.groupItems[group] || []).filter((item) => item !== name);
+    });
+    Object.keys(data.memberItems || {}).forEach((member) => {
+      data.memberItems[member] = (data.memberItems[member] || []).filter((item) => item !== name);
+    });
+  });
+  Object.values(data.records || {}).forEach((record) => recalculateRecordTotals(record, data.rules));
+  renderRules();
+  renderEntryInputs(filterItemsByRules(readEntryInputs()));
+  preview();
+  scheduleSave("admin");
+}
 function renderRules() {
   $("rulesBox").innerHTML = `
+    <div class="rule-admin-tools">
+      <button type="button" data-delete-selected-rules>删除勾选项目</button>
+      <span class="hint">删除后不再显示/计算，已保存的历史记录不清空。</span>
+    </div>
     <div class="rule-row config-head">
+      <span></span>
       <span>项目</span>
       <span>工作量</span>
       <span>视频成品</span>
@@ -2620,6 +2634,7 @@ function renderRules() {
     row.className = "rule-row";
     const productRule = data.productRules?.[name] || defaultProductRuleFor(name);
     row.innerHTML = `
+      <label class="member-row-check" title="勾选后可批量删除"><input type="checkbox" data-rule-select="${escapeAttr(name)}"></label>
       <input value="${escapeAttr(name)}" aria-label="项目">
       <input type="number" step="0.01" value="${Number(weight)}" aria-label="工作量系数" title="工作量系数">
       <input type="number" step="0.01" value="${Number(productRule.video || 0)}" aria-label="视频成品系数" title="视频成品系数">
@@ -2627,35 +2642,25 @@ function renderRules() {
       <button class="icon" title="删除">×</button>
     `;
     const inputs = row.querySelectorAll("input");
-    inputs[0].onchange = () => renameRule(name, inputs[0].value.trim(), Number(inputs[1].value), Number(inputs[2].value), Number(inputs[3].value));
-    [inputs[1], inputs[2], inputs[3]].forEach((input) => {
+    inputs[1].onchange = () => renameRule(name, inputs[1].value.trim(), Number(inputs[2].value), Number(inputs[3].value), Number(inputs[4].value));
+    [inputs[2], inputs[3], inputs[4]].forEach((input) => {
       input.oninput = () => {
-      data.rules[name] = Number(inputs[1].value || 0);
-      data.productRules[name] = {
-        video: Number(inputs[2].value || 0),
-        ai: Number(inputs[3].value || 0)
-      };
-      renderEntryInputs(readEntryInputs());
-      preview();
-      scheduleSave("admin");
+        data.rules[name] = Number(inputs[2].value || 0);
+        data.productRules[name] = {
+          video: Number(inputs[3].value || 0),
+          ai: Number(inputs[4].value || 0)
+        };
+        renderEntryInputs(readEntryInputs());
+        preview();
+        scheduleSave("admin");
       };
     });
-    row.querySelector("button").onclick = () => {
-      createBackup(`删除项目 ${name} 前备份`);
-      delete data.rules[name];
-      delete data.productRules?.[name];
-      Object.keys(data.groupItems || {}).forEach((group) => {
-        data.groupItems[group] = (data.groupItems[group] || []).filter((item) => item !== name);
-      });
-      Object.keys(data.memberItems || {}).forEach((member) => {
-        data.memberItems[member] = (data.memberItems[member] || []).filter((item) => item !== name);
-      });
-      renderRules();
-      renderEntryInputs(filterItemsByRules(readEntryInputs()));
-      preview();
-      scheduleSave("admin");
-    };
+    row.querySelector("button").onclick = () => deleteRules([name]);
     $("rulesBox").appendChild(row);
+  });
+  $("rulesBox").querySelector("button[data-delete-selected-rules]")?.addEventListener("click", () => {
+    const names = Array.from($("rulesBox").querySelectorAll("input[data-rule-select]:checked")).map((input) => input.dataset.ruleSelect);
+    deleteRules(names);
   });
 }
 function renderMemberQuotas() {
@@ -2674,7 +2679,7 @@ function renderMemberQuotas() {
     $("dateQuotaInput").value = value === undefined || value === null ? "" : value;
     $("dateQuotaInput").placeholder = fmt(data.quota);
   }
-  visibleConfiguredMembers(data).forEach((name) => {
+  reportMembers(data).forEach((name) => {
     const row = document.createElement("div");
     row.className = "quota-row";
     const own = data.memberQuotas[name] ?? "";
@@ -2703,7 +2708,16 @@ function renderMemberQuotas() {
   });
 }
 function renderMemberGroups() {
-  const visibleMembers = visibleConfiguredMembers(data);
+  const visibleMembers = reportMembers(data);
+  const configured = new Set(data.members || []);
+  const recordOnlyCount = visibleMembers.filter((name) => !configured.has(name)).length;
+  const toolsHtml = `
+    <div class="member-admin-tools">
+      <button type="button" data-hide-selected-members>隐藏勾选成员</button>
+      ${recordOnlyCount ? `<button type="button" data-select-record-members>勾选记录成员 · ${recordOnlyCount}</button>` : ""}
+      <span class="hint">隐藏后不参与侧边栏、整体预览和混合表格，历史记录仍保留。</span>
+    </div>
+  `;
   const groupHtml = data.groups.map((group) => {
     const members = visibleMembers.filter((name) => (data.memberGroups?.[name] || data.groups[0]) === group);
     return `
@@ -2714,15 +2728,19 @@ function renderMemberGroups() {
         </summary>
         ${members.map((name) => {
           const index = data.members.indexOf(name);
+          const isConfigured = index >= 0;
           const groupValue = data.memberGroups?.[name] || data.groups[0] || "";
           return `
-            <div class="member-group-row">
+            <div class="member-group-row ${isConfigured ? "" : "record-only-member"}">
+              <label class="member-row-check" title="勾选后可批量隐藏"><input type="checkbox" data-member-select="${escapeAttr(name)}"></label>
               <input value="${escapeAttr(name)}" data-member-name="${escapeAttr(name)}" aria-label="成员">
               <select data-member-group="${escapeAttr(name)}">
                 ${data.groups.map((item) => `<option value="${escapeAttr(item)}" ${item === groupValue ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}
               </select>
-              <button class="icon" data-move-up="${escapeAttr(name)}" ${index === 0 ? "disabled" : ""} title="上移">↑</button>
-              <button class="icon" data-move-down="${escapeAttr(name)}" ${index === data.members.length - 1 ? "disabled" : ""} title="下移">↓</button>
+              ${isConfigured
+                ? `<button class="icon" data-move-up="${escapeAttr(name)}" ${index === 0 ? "disabled" : ""} title="上移">↑</button>`
+                : `<button class="icon" data-promote-member="${escapeAttr(name)}" title="加入正式成员名单">收</button>`}
+              <button class="icon" data-move-down="${escapeAttr(name)}" ${!isConfigured || index === data.members.length - 1 ? "disabled" : ""} title="下移">↓</button>
               <button class="icon" data-remove-member="${escapeAttr(name)}" title="隐藏成员">隐</button>
             </div>
           `;
@@ -2738,7 +2756,8 @@ function renderMemberGroups() {
           const group = data.memberGroups?.[member] || "未分组";
           const date = hiddenAt && hiddenAt !== true ? String(hiddenAt).slice(0, 10) : "已隐藏";
           return `
-            <div class="member-group-row">
+            <div class="member-group-row hidden-member-row">
+              <span></span>
               <input value="${escapeAttr(member)}" aria-label="隐藏成员" disabled>
               <span class="hint">${escapeHtml(group)} · ${escapeHtml(date)}</span>
               <span></span>
@@ -2749,7 +2768,7 @@ function renderMemberGroups() {
         }).join("")}
       </details>
     ` : "";
-  $("memberGroupBox").innerHTML = groupHtml + hiddenHtml;
+  $("memberGroupBox").innerHTML = toolsHtml + groupHtml + hiddenHtml;
   $("memberGroupBox").querySelectorAll("input[data-group-name]").forEach((input) => {
     input.onchange = () => renameGroup(input.dataset.groupName, input.value.trim());
   });
@@ -2774,9 +2793,19 @@ function renderMemberGroups() {
   $("memberGroupBox").querySelectorAll("button[data-move-down]").forEach((button) => {
     button.onclick = () => moveMember(button.dataset.moveDown, 1);
   });
+  $("memberGroupBox").querySelectorAll("button[data-promote-member]").forEach((button) => {
+    button.onclick = () => promoteMember(button.dataset.promoteMember);
+  });
   $("memberGroupBox").querySelectorAll("button[data-remove-member]").forEach((button) => {
     button.onclick = () => removeMember(button.dataset.removeMember);
   });
+  $("memberGroupBox").querySelector("button[data-select-record-members]")?.addEventListener("click", () => {
+    const configured = new Set(data.members || []);
+    $("memberGroupBox").querySelectorAll("input[data-member-select]").forEach((input) => {
+      input.checked = !configured.has(input.dataset.memberSelect);
+    });
+  });
+  $("memberGroupBox").querySelector("button[data-hide-selected-members]")?.addEventListener("click", hideSelectedMembers);
   $("memberGroupBox").querySelectorAll("button[data-restore-member]").forEach((button) => {
     button.onclick = () => restoreMember(button.dataset.restoreMember);
   });
@@ -2976,6 +3005,37 @@ function addMember(name, groupName = data.groups[0] || "1组") {
   render();
   scheduleSave("admin");
 }
+function promoteMember(name) {
+  if (!name) return;
+  data.hiddenMembers = data.hiddenMembers || {};
+  delete data.hiddenMembers[name];
+  delete data.deletedMembers?.[name];
+  if (!data.members.includes(name)) data.members.push(name);
+  if (!data.memberGroups[name]) data.memberGroups[name] = data.groups[0] || "1组";
+  if (!Array.isArray(data.memberItems[name])) data.memberItems[name] = configuredItems();
+  render();
+  scheduleSave("admin");
+}
+function hideMembers(names = []) {
+  const unique = Array.from(new Set(names.map((name) => String(name || "").trim()).filter(Boolean)));
+  if (!unique.length) return alert("请先勾选要隐藏的成员。");
+  const visibleAfter = reportMembers(data).filter((name) => !unique.includes(name));
+  if (!visibleAfter.length) return alert("至少保留一个显示成员。");
+  if (!confirm(`确定隐藏 ${unique.length} 位成员？会从成员列表、整体预览和混合表格中隐藏，但保留历史记录和配置。`)) return;
+  data.hiddenMembers = data.hiddenMembers || {};
+  unique.forEach((name) => {
+    data.hiddenMembers[name] = new Date().toISOString();
+    delete data.deletedMembers?.[name];
+  });
+  if (unique.includes(currentMember)) currentMember = firstVisibleMember(data);
+  loadForm();
+  render();
+  scheduleSave("admin");
+}
+function hideSelectedMembers() {
+  const names = Array.from($("memberGroupBox")?.querySelectorAll("input[data-member-select]:checked") || []).map((input) => input.dataset.memberSelect);
+  hideMembers(names);
+}
 function restoreMember(name, groupName = "") {
   if (!name) return;
   saveFormSilently();
@@ -2992,15 +3052,7 @@ function restoreMember(name, groupName = "") {
   scheduleSave("admin");
 }
 function removeMember(name) {
-  if (visibleConfiguredMembers(data).length <= 1) return alert("至少保留一个显示成员。");
-  if (!confirm(`确定隐藏成员“${name}”？会从成员列表、整体预览和混合表格中隐藏，但保留历史记录和配置。`)) return;
-  data.hiddenMembers = data.hiddenMembers || {};
-  data.hiddenMembers[name] = new Date().toISOString();
-  delete data.deletedMembers?.[name];
-  if (currentMember === name) currentMember = firstVisibleMember(data);
-  loadForm();
-  render();
-  scheduleSave("admin");
+  hideMembers([name]);
 }
 function latestRecordText(records, fields = ["reason", "harvest", "diary"]) {
   return records
@@ -6230,9 +6282,13 @@ function importEnsureItem(target, itemName, stats, sourceRules = null, sourcePro
   const name = importCellText(itemName);
   if (!name || importIsMetadataHeader(name)) return "";
   if (target.rules[name] === undefined) {
-    target.rules[name] = data.rules?.[name] ?? sourceRules?.[name] ?? 1;
-    target.productRules[name] = data.productRules?.[name] || sourceProductRules?.[name] || defaultProductRuleFor(name);
-    stats.items += 1;
+    if (Array.isArray(stats.skippedItemNames)) {
+      if (!stats.skippedItemNames.includes(name)) stats.skippedItemNames.push(name);
+      stats.skippedItems = stats.skippedItemNames.length;
+    } else {
+      stats.skippedItems = (stats.skippedItems || 0) + 1;
+    }
+    return "";
   }
   return name;
 }
@@ -6245,6 +6301,7 @@ function importEnsureMember(target, member, group, stats) {
   if (!target.members.includes(name) && !hidden) {
     target.members.push(name);
     stats.members += 1;
+    if (Array.isArray(stats.newMembers) && !stats.newMembers.includes(name)) stats.newMembers.push(name);
   }
   if (!hidden || !target.memberGroups?.[name]) target.memberGroups[name] = groupName;
   if (!Array.isArray(target.groupItems[groupName])) target.groupItems[groupName] = Object.keys(target.rules || {});
@@ -6345,6 +6402,10 @@ function importApplyRecord(target, stats, record) {
     const itemName = importEnsureItem(target, name, stats, record.sourceRules, record.sourceProductRules);
     if (itemName) items[itemName] = value;
   });
+  if (!importedRecordHasContent(items, checkins, note, dutyHours)) {
+    stats.emptyRows = (stats.emptyRows || 0) + 1;
+    return;
+  }
   const totals = mergedEntryTotals(items, target.rules || {});
   const imported = {
     date: day,
@@ -6729,7 +6790,7 @@ async function fileToWorkbookSheets(file) {
 function importJsonBackupToData(sourceData) {
   const backup = normalize(sourceData);
   const target = normalize(data);
-  const stats = { records: 0, members: 0, items: 0, checkins: 0, skipped: 0, emptyRows: 0, unchanged: 0, seenRecordKeys: new Set() };
+  const stats = { records: 0, members: 0, newMembers: [], items: 0, skippedItems: 0, skippedItemNames: [], checkins: 0, skipped: 0, emptyRows: 0, unchanged: 0, seenRecordKeys: new Set() };
   target.dailyQuotas = mergeDailyQuotas(backup.dailyQuotas, target.dailyQuotas, "admin");
   target.monthlyPlans = mergeMonthlyPlans(backup.monthlyPlans, target.monthlyPlans);
   target.freeTable = mergeFreeTable(backup.freeTable, target.freeTable);
@@ -6747,7 +6808,7 @@ function importJsonBackupToData(sourceData) {
 }
 function importWorkbookToData(sheets) {
   const target = normalize(data);
-  const stats = { records: 0, members: 0, items: 0, checkins: 0, skipped: 0, emptyRows: 0, unchanged: 0, seenRecordKeys: new Set() };
+  const stats = { records: 0, members: 0, newMembers: [], items: 0, skippedItems: 0, skippedItemNames: [], checkins: 0, skipped: 0, emptyRows: 0, unchanged: 0, seenRecordKeys: new Set() };
   sheets.forEach((sheet) => {
     const rows = (sheet.rows || []).filter((row) => row.some((cell) => importCellText(cell)));
     importRowsFromRecordTable(target, stats, rows);
@@ -6756,13 +6817,32 @@ function importWorkbookToData(sheets) {
   });
   return { data: normalize(target), stats };
 }
+function importNewMemberConfirmText(stats = {}) {
+  const lines = [];
+  const names = Array.isArray(stats.newMembers) ? stats.newMembers : [];
+  if (names.length) {
+    const preview = names.slice(0, 20).join("、");
+    const more = names.length > 20 ? ` 等 ${names.length} 人` : "";
+    lines.push(`将新增成员：${preview}${more}`);
+    lines.push("导入后可在“管理员 > 成员与分组”勾选多余成员并隐藏。");
+  }
+  const skippedItems = Array.isArray(stats.skippedItemNames) ? stats.skippedItemNames : [];
+  if (skippedItems.length) {
+    const preview = skippedItems.slice(0, 20).join("、");
+    const more = skippedItems.length > 20 ? ` 等 ${skippedItems.length} 项` : "";
+    lines.push(`已跳过旧表多余项目：${preview}${more}`);
+    lines.push("只导入当前管理员项目中已有的项目列。");
+  }
+  return lines.length ? `\n\n${lines.join("\n")}` : "";
+}
 async function importData(file) {
   try {
     if (!file) return;
     if (/\.json$/i.test(file.name || "")) {
       const text = await file.text();
       const result = importJsonBackupToData(JSON.parse(String(text || "{}")));
-      const confirmed = confirm(`可从 JSON 备份安全补充 ${result.stats.records} 条记录、${result.stats.checkins} 个打卡、${result.stats.members} 个新成员、${result.stats.items} 个缺失项目。\n\n当前项目分类、分组项目勾选、成员项目配置会以现在软件里的最新设置为准，不会被旧备份覆盖或删除。\n\n确定合并导入吗？导入前会自动备份当前数据。`);
+      const newMemberText = importNewMemberConfirmText(result.stats);
+      const confirmed = confirm(`可从 JSON 备份安全补充 ${result.stats.records} 条记录、${result.stats.checkins} 个打卡、${result.stats.members} 个新成员、${result.stats.skippedItems || 0} 个旧项目已跳过。${newMemberText}\n\n当前项目分类、分组项目勾选、成员项目配置会以现在软件里的最新设置为准，不会被旧备份覆盖或删除。\n\n确定合并导入吗？导入前会自动备份当前数据。`);
       if (!confirmed) return;
       createBackup("JSON 安全合并导入前备份");
       data = result.data;
@@ -6770,7 +6850,8 @@ async function importData(file) {
       const sheets = await fileToWorkbookSheets(file);
       const result = importWorkbookToData(sheets);
       if (!result.stats.records) throw new Error("没有识别到可恢复的每日记录。请在 Google 表格里切到“全部记录”工作表，下载 CSV 后再导入。");
-      const confirmed = confirm(`可补充 ${result.stats.records} 条记录、${result.stats.checkins} 个打卡、${result.stats.members} 个新成员、${result.stats.items} 个新项目。已自动跳过 ${result.stats.emptyRows || 0} 条空白/全0行，保留 ${result.stats.unchanged || 0} 条已有数据。\n\n当前项目分类、分组项目勾选、成员项目配置会以现在软件里的最新设置为准，不会被旧表格覆盖或删除。\n\n确定合并导入到当前日记软件吗？导入前会自动备份当前数据。`);
+      const newMemberText = importNewMemberConfirmText(result.stats);
+      const confirmed = confirm(`可补充 ${result.stats.records} 条记录、${result.stats.checkins} 个打卡、${result.stats.members} 个新成员。已自动跳过 ${result.stats.emptyRows || 0} 条空白/全0行、${result.stats.skippedItems || 0} 个旧项目，保留 ${result.stats.unchanged || 0} 条已有数据。${newMemberText}\n\n当前项目分类、分组项目勾选、成员项目配置会以现在软件里的最新设置为准，不会被旧表格覆盖或删除。\n\n确定合并导入到当前日记软件吗？导入前会自动备份当前数据。`);
       if (!confirmed) return;
       createBackup("表格恢复导入前备份");
       data = result.data;
