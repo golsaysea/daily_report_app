@@ -6289,7 +6289,6 @@ function importKnownRuleName(target, itemName) {
   const aliases = {
     "动画量": ["动画"],
     "模板": ["模板套数"],
-    "逐句出字": ["逐个出字"],
     "钩子": ["开场钩子", "简单钩子"],
     "形式化": ["形式化视频"],
     "gork视频": ["grok视频", "gork视频"]
