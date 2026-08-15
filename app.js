@@ -3578,29 +3578,36 @@ function sortedOverviewGroupRows(rows = []) {
     return String(a.member || "").localeCompare(String(b.member || ""), "zh-CN");
   });
 }
+function overviewBriefStatus(productTotal, quota) {
+  const total = Number(productTotal || 0);
+  const target = Number(quota || 0);
+  if (target <= 0) return total > 0 ? "达标" : "不达标";
+  return total >= target ? "达标" : "不达标";
+}
+function overviewBriefDiffText(productTotal, quota) {
+  const diff = cleanTotalValue(Number(productTotal || 0) - Number(quota || 0));
+  if (diff < 0) return fmt(Math.abs(diff));
+  return diff > 0 ? `+${fmt(diff)}` : "0";
+}
 function overviewGroupBriefLine(row, itemNames) {
-  const status = row.status || quotaStatusFromTotals(row.productTotal || 0, row.quota || 0, row.completeQuota || row.quota || 0);
+  const status = overviewBriefStatus(row.productTotal || 0, row.quota || 0);
   const note = String(row.note || "").trim();
   const parts = [
-    `${row.member}（自由编队：${row.subgroup || "未分队"}）：${status}`,
-    `一级定额 ${fmt(row.quota)}`,
-    `完全定额 ${fmt(row.completeQuota || row.quota || 0)}`,
+    `${row.member}：${status}`,
+    `定额 ${fmt(row.quota)}`,
     `成品量 ${fmt(row.productTotal || 0)}`,
-    `一级差额 ${signedTotalText(row.diff)}`,
-    `完全差额 ${signedTotalText(row.completeDiff ?? ((row.productTotal || 0) - (row.completeQuota || row.quota || 0)))}`,
-    `换算工作量 ${fmt(row.weighted)}`,
-    row.dutyHours ? `尽本分 ${fmtDutyHours(row.dutyHours)}` : "",
+    `差额 ${overviewBriefDiffText(row.productTotal || 0, row.quota || 0)}`,
     `项目 ${overviewGroupBriefItemDetail(row, itemNames)}`,
     note ? `备注 ${note}` : ""
   ].filter(Boolean);
   return parts.join("｜");
 }
 function overviewGroupBriefReasonText(row, itemNames) {
-  const status = row.status || quotaStatusFromTotals(row.productTotal || 0, row.quota || 0, row.completeQuota || row.quota || 0);
+  const status = overviewBriefStatus(row.productTotal || 0, row.quota || 0);
   const note = String(row.note || "").trim();
   const lines = [
-    `${row.member}（自由编队：${row.subgroup || "未分队"}）：${status}`,
-    `   一级定额：${fmt(row.quota)}｜完全定额：${fmt(row.completeQuota || row.quota || 0)}｜成品量：${fmt(row.productTotal || 0)}｜一级差额：${signedTotalText(row.diff)}｜完全差额：${signedTotalText(row.completeDiff ?? ((row.productTotal || 0) - (row.completeQuota || row.quota || 0)))}｜换算工作量：${fmt(row.weighted)}${row.dutyHours ? `｜尽本分时长：${fmtDutyHours(row.dutyHours)}` : ""}`,
+    `${row.member}：${status}`,
+    `   定额：${fmt(row.quota)}｜成品量：${fmt(row.productTotal || 0)}｜差额：${overviewBriefDiffText(row.productTotal || 0, row.quota || 0)}`,
     `   项目明细：${overviewGroupBriefItemDetail(row, itemNames)}`
   ];
   if (note) lines.push(`   备注：${note}`);
@@ -3610,31 +3617,18 @@ function buildOverviewGroupBriefTextForRange(group, range, label, report = repor
   const days = buildDateRange(range.start, range.end);
   const itemNames = configuredItems();
   const groupRows = membersForGroupValue(group, report).map((member) => aggregateMemberRange(member, days, report, itemNames));
-  const totalWeighted = groupRows.reduce((sum, row) => sum + row.weighted, 0);
-  const totalQuota = groupRows.reduce((sum, row) => sum + row.quota, 0);
-  const totalCompleteQuota = groupRows.reduce((sum, row) => sum + row.completeQuota, 0);
-  const totalVideoProduct = groupRows.reduce((sum, row) => sum + Number(row.video || 0), 0);
-  const totalAiProduct = groupRows.reduce((sum, row) => sum + Number(row.ai || 0), 0);
-  const totalProduct = productTotalValue({ video: totalVideoProduct, ai: totalAiProduct });
-  const totalDiff = totalProduct - totalQuota;
-  const totalStatus = quotaStatusFromTotals(totalProduct, totalQuota, totalCompleteQuota);
-  const totalDutyHours = groupRows.reduce((sum, row) => sum + Number(row.dutyHours || 0), 0);
+  const summary = summarizeOverviewRows(groupRows);
+  const status = overviewBriefStatus(summary.productTotal, summary.quota);
   const detailLines = sortedOverviewGroupRows(groupRows).length
     ? sortedOverviewGroupRows(groupRows).map((row) => overviewGroupBriefReasonText(row, itemNames))
     : ["暂无成员数据。"];
   return [
     `${group} ${label}报数`,
     `时间：${rangeText(range)}`,
-    `一级定额：${fmt(totalQuota)}`,
-    `完全定额：${fmt(totalCompleteQuota)}`,
-    `成品量：${fmt(totalProduct)}`,
-    `换算工作量：${fmt(totalWeighted)}`,
-    `尽本分时长：${fmtDutyHours(totalDutyHours)}`,
-    `视频成品：${fmt(totalVideoProduct)}`,
-    `AI成品：${fmt(totalAiProduct)}`,
-    `一级差额：${totalDiff >= 0 ? "+" : ""}${fmt(totalDiff)}`,
-    `完全差额：${signedTotalText(totalProduct - totalCompleteQuota)}`,
-    `状态：${totalStatus}`,
+    `定额：${fmt(summary.quota)}`,
+    `成品量：${fmt(summary.productTotal)}`,
+    `差额：${overviewBriefDiffText(summary.productTotal, summary.quota)}`,
+    `状态：${status}`,
     "成员达标与项目明细：",
     ...detailLines
   ].join("\n");
@@ -3653,34 +3647,21 @@ function overviewGroupBriefRows(group, report = reportData()) {
   const days = buildDateRange(range.start, range.end);
   const itemNames = configuredItems();
   const groupRows = membersForGroupValue(group, report).map((member) => aggregateMemberRange(member, days, report, itemNames));
-  const totalWeighted = groupRows.reduce((sum, row) => sum + row.weighted, 0);
-  const totalQuota = groupRows.reduce((sum, row) => sum + row.quota, 0);
-  const totalCompleteQuota = groupRows.reduce((sum, row) => sum + row.completeQuota, 0);
-  const totalVideoProduct = groupRows.reduce((sum, row) => sum + Number(row.video || 0), 0);
-  const totalAiProduct = groupRows.reduce((sum, row) => sum + Number(row.ai || 0), 0);
-  const totalProduct = productTotalValue({ video: totalVideoProduct, ai: totalAiProduct });
-  const totalDiff = totalProduct - totalQuota;
-  const totalStatus = quotaStatusFromTotals(totalProduct, totalQuota, totalCompleteQuota);
-  const totalDutyHours = groupRows.reduce((sum, row) => sum + Number(row.dutyHours || 0), 0);
+  const summary = summarizeOverviewRows(groupRows);
+  const status = overviewBriefStatus(summary.productTotal, summary.quota);
   const reasonLines = sortedOverviewGroupRows(groupRows).length
     ? sortedOverviewGroupRows(groupRows).map((row) => overviewGroupBriefLine(row, itemNames))
     : ["暂无成员数据。"];
-
   return [
-    [styledCell(`${group} ${range.label}报数｜${rangeText(range)}`, "sTitle", { mergeAcross: 11 })],
-    ["小组", "范围", "一级定额", "完全定额", "成品量", "换算工作量", "尽本分时长", "视频成品", "AI成品", "一级差额", "状态", "成员达标与项目明细"].map((label) => styledCell(label, "sHeader")),
+    [styledCell(`${group} ${range.label}报数｜${rangeText(range)}`, "sTitle", { mergeAcross: 6 })],
+    ["小组", "范围", "定额", "成品量", "差额", "状态", "成员达标与项目明细"].map((label) => styledCell(label, "sHeader")),
     [
       styledCell(group, "sDate"),
       styledCell(rangeText(range), "sItem"),
-      styledCell(totalQuota, "sQuota"),
-      styledCell(totalCompleteQuota, "sQuota"),
-      styledCell(totalProduct, "sTotal"),
-      styledCell(totalWeighted, "sTotal"),
-      styledCell(totalDutyHours, "sTotal"),
-      styledCell(totalVideoProduct, "sTotal"),
-      styledCell(totalAiProduct, "sTotal"),
-      styledCell(totalDiff, totalDiff >= 0 ? "sDiffGood" : "sDiffBad"),
-      styledCell(totalStatus, mixedExportStatusStyle(totalStatus)),
+      styledCell(summary.quota, "sQuota"),
+      styledCell(summary.productTotal, "sTotal"),
+      styledCell(overviewBriefDiffText(summary.productTotal, summary.quota), status === "达标" ? "sDiffGood" : "sDiffBad"),
+      styledCell(status, mixedExportStatusStyle(status)),
       styledCell(reasonLines.join("\n"), "sNote")
     ]
   ];
@@ -3688,11 +3669,11 @@ function overviewGroupBriefRows(group, report = reportData()) {
 function buildOverviewBriefWorkbook(groups, report = reportData()) {
   const rows = groups.flatMap((group, index) => {
     const groupRows = overviewGroupBriefRows(group, report);
-    return index < groups.length - 1 ? [...groupRows, [styledCell("", "sSpacer", { mergeAcross: 9 })]] : groupRows;
+    return index < groups.length - 1 ? [...groupRows, [styledCell("", "sSpacer", { mergeAcross: 6 })]] : groupRows;
   });
   return {
-    rows: rows.length ? rows : [[styledCell("暂无可导出小组", "sTitle", { mergeAcross: 9 })]],
-    columns: [120, 150, 90, 90, 100, 100, 90, 90, 90, 90, 90, 460]
+    rows: rows.length ? rows : [[styledCell("暂无可导出小组", "sTitle", { mergeAcross: 6 })]],
+    columns: [120, 150, 90, 100, 90, 90, 460]
   };
 }
 function exportOverviewGroupBrief(group) {
@@ -3725,49 +3706,38 @@ function overviewRowsPrimaryGroupLabel(rows = [], report = reportData()) {
 }
 function overviewRowsBriefText(title, range, label, rows, itemNames, sourceLabel = "") {
   const summary = summarizeOverviewRows(rows);
+  const status = overviewBriefStatus(summary.productTotal, summary.quota);
   const detailLines = sortedOverviewGroupRows(rows).length
     ? sortedOverviewGroupRows(rows).map((row) => overviewGroupBriefReasonText(row, itemNames))
     : ["暂无成员数据。"];
   return [
     `${title} ${label}报数`,
     `时间：${rangeText(range)}`,
-    sourceLabel ? `一级小组来源：${sourceLabel}` : "",
-    `一级定额：${fmt(summary.quota)}`,
-    `完全定额：${fmt(summary.completeQuota)}`,
+    `定额：${fmt(summary.quota)}`,
     `成品量：${fmt(summary.productTotal)}`,
-    `换算工作量：${fmt(summary.weighted)}`,
-    `尽本分时长：${fmtDutyHours(summary.dutyHours)}`,
-    `视频成品：${fmt(summary.video)}`,
-    `AI成品：${fmt(summary.ai)}`,
-    `一级差额：${signedTotalText(summary.diff)}`,
-    `完全差额：${signedTotalText(summary.completeDiff)}`,
-    `状态：${summary.status}`,
+    `差额：${overviewBriefDiffText(summary.productTotal, summary.quota)}`,
+    `状态：${status}`,
     "成员达标与项目明细：",
     ...detailLines
-  ].filter(Boolean).join("\n");
+  ].join("\n");
 }
 function overviewRowsBriefRows(title, range, rows, itemNames, sourceLabel = "") {
   const summary = summarizeOverviewRows(rows);
+  const status = overviewBriefStatus(summary.productTotal, summary.quota);
   const reasonLines = sortedOverviewGroupRows(rows).length
     ? sortedOverviewGroupRows(rows).map((row) => overviewGroupBriefLine(row, itemNames))
     : ["暂无成员数据。"];
-  const detailText = [sourceLabel ? `一级小组来源：${sourceLabel}` : "", ...reasonLines].filter(Boolean).join("\n");
   return [
-    [styledCell(`${title}｜${rangeText(range)}`, "sTitle", { mergeAcross: 11 })],
-    ["对象", "范围", "一级定额", "完全定额", "成品量", "换算工作量", "尽本分时长", "视频成品", "AI成品", "一级差额", "状态", "成员达标与项目明细"].map((header) => styledCell(header, "sHeader")),
+    [styledCell(`${title}｜${rangeText(range)}`, "sTitle", { mergeAcross: 6 })],
+    ["对象", "范围", "定额", "成品量", "差额", "状态", "成员达标与项目明细"].map((header) => styledCell(header, "sHeader")),
     [
       styledCell(title, "sDate"),
       styledCell(rangeText(range), "sItem"),
       styledCell(summary.quota, "sQuota"),
-      styledCell(summary.completeQuota, "sQuota"),
       styledCell(summary.productTotal, "sTotal"),
-      styledCell(summary.weighted, "sTotal"),
-      styledCell(summary.dutyHours, "sTotal"),
-      styledCell(summary.video, "sTotal"),
-      styledCell(summary.ai, "sTotal"),
-      styledCell(summary.diff, summary.diff >= 0 ? "sDiffGood" : "sDiffBad"),
-      styledCell(summary.status, mixedExportStatusStyle(summary.status)),
-      styledCell(detailText, "sNote")
+      styledCell(overviewBriefDiffText(summary.productTotal, summary.quota), status === "达标" ? "sDiffGood" : "sDiffBad"),
+      styledCell(status, mixedExportStatusStyle(status)),
+      styledCell(reasonLines.join("\n"), "sNote")
     ]
   ];
 }
@@ -3782,7 +3752,7 @@ function overviewSubgroupRowsForRange(subgroup, range, report = reportData()) {
 }
 function buildOverviewSubgroupBriefTextForRange(subgroup, range, label, report = reportData()) {
   const { rows, itemNames } = overviewSubgroupRowsForRange(subgroup, range, report);
-  return overviewRowsBriefText(`${subgroup} 二级自由编队`, range, label, rows, itemNames, overviewRowsPrimaryGroupLabel(rows, report));
+  return overviewRowsBriefText(subgroup, range, label, rows, itemNames);
 }
 function buildOverviewSubgroupBriefText(subgroup, report = reportData()) {
   const range = overviewRangeInfo();
@@ -3796,14 +3766,14 @@ function buildOverviewSubgroupBriefText(subgroup, report = reportData()) {
 function overviewSubgroupBriefRows(subgroup, report = reportData()) {
   const range = overviewRangeInfo();
   const { rows, itemNames } = overviewSubgroupRowsForRange(subgroup, range, report);
-  return overviewRowsBriefRows(`${subgroup} 二级自由编队`, range, rows, itemNames, overviewRowsPrimaryGroupLabel(rows, report));
+  return overviewRowsBriefRows(subgroup, range, rows, itemNames);
 }
 function exportOverviewSubgroupBrief(subgroup) {
   const report = selectedReportData();
   const rows = withReportData(report, () => overviewSubgroupBriefRows(subgroup, report));
   const range = overviewRangeInfo();
   const safeName = String(subgroup || "subgroup").replace(/[\\/:*?"<>|]/g, "_");
-  downloadBlob(buildXlsxWorkbook(`${safeName}自由编队简报`, rows, [120, 150, 90, 90, 100, 100, 90, 90, 90, 90, 90, 460]), `overview_subgroup_${safeName}_${range.start}_${range.end}.xlsx`);
+  downloadBlob(buildXlsxWorkbook(`${safeName}简报`, rows, [120, 150, 90, 100, 90, 90, 460]), `overview_subgroup_${safeName}_${range.start}_${range.end}.xlsx`);
 }
 function exportOverviewSubgroupBriefText(subgroup) {
   const report = selectedReportData();
@@ -3817,7 +3787,7 @@ async function copyOverviewSubgroupBriefText(subgroup) {
   const text = withReportData(report, () => buildOverviewSubgroupBriefText(subgroup, report));
   try {
     await navigator.clipboard.writeText(text);
-    showDialog("已复制TXT", "二级自由编队简报已经复制到剪贴板。", "");
+    showDialog("已复制TXT", "简报内容已经复制到剪贴板。", "");
   } catch {
     showDialog("复制失败", "浏览器没有允许写入剪贴板，可以先用“导出TXT”下载。", "");
   }
