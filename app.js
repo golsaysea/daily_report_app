@@ -2950,8 +2950,26 @@ function renderMemberGroups() {
     <div class="member-admin-tools">
       <button type="button" data-hide-selected-members>隐藏勾选成员</button>
       ${recordOnlyCount ? `<button type="button" data-select-record-members>勾选记录成员 · ${recordOnlyCount}</button>` : ""}
-      <span class="hint">二级小组可填 A队、代培组、预备组长；隐藏后不参与侧边栏、整体预览和混合表格，历史记录仍保留。</span>
+      <span class="hint">二级自由编队独立于一级小组，可跨组安排 A队、代培组、预备组长；一级小组仍只按领导安排报总量。</span>
     </div>
+  `;
+  const subgroupEntries = groupRowsBySubgroup(visibleMembers.map((name) => ({
+    member: name,
+    subgroup: memberSubgroup(name, data),
+    primaryGroup: data.memberGroups?.[name] || data.groups[0] || "未分组"
+  })));
+  const freeSubgroupHtml = `
+    <details class="overview-group member-subgroup-admin" open>
+      <summary><span>二级自由编队列表 · ${subgroupEntries.length} 个</span><span class="hint">独立维度，可跨一级小组自由组队</span></summary>
+      <div class="subgroup-admin-list">
+        ${subgroupEntries.map(({ name, rows }) => `
+          <div class="subgroup-admin-card">
+            <strong>${escapeHtml(name)} · ${rows.length} 人</strong>
+            <span>${rows.map((row) => `${escapeHtml(row.member)}（${escapeHtml(row.primaryGroup)}）`).join("、")}</span>
+          </div>
+        `).join("") || `<div class="hint">还没有二级自由编队。</div>`}
+      </div>
+    </details>
   `;
   const groupHtml = data.groups.map((group) => {
     const members = visibleMembers.filter((name) => (data.memberGroups?.[name] || data.groups[0]) === group);
@@ -2970,7 +2988,7 @@ function renderMemberGroups() {
             <div class="member-group-row ${isConfigured ? "" : "record-only-member"}">
               <label class="member-row-check" title="勾选后可批量隐藏"><input type="checkbox" data-member-select="${escapeAttr(name)}"></label>
               <input value="${escapeAttr(name)}" data-member-name="${escapeAttr(name)}" aria-label="成员">
-              <input value="${escapeAttr(subgroupValue)}" data-member-subgroup="${escapeAttr(name)}" placeholder="二级小组/小队" aria-label="二级小组">
+              <input value="${escapeAttr(subgroupValue)}" data-member-subgroup="${escapeAttr(name)}" placeholder="二级自由编队" aria-label="二级自由编队">
               <select data-member-group="${escapeAttr(name)}">
                 ${data.groups.map((item) => `<option value="${escapeAttr(item)}" ${item === groupValue ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}
               </select>
@@ -3007,7 +3025,7 @@ function renderMemberGroups() {
         }).join("")}
       </details>
     ` : "";
-  $("memberGroupBox").innerHTML = toolsHtml + groupHtml + hiddenHtml;
+  $("memberGroupBox").innerHTML = toolsHtml + freeSubgroupHtml + groupHtml + hiddenHtml;
   $("memberGroupBox").querySelectorAll("input[data-group-name]").forEach((input) => {
     input.onchange = () => renameGroup(input.dataset.groupName, input.value.trim());
   });
@@ -3564,7 +3582,7 @@ function overviewGroupBriefLine(row, itemNames) {
   const status = row.status || quotaStatusFromTotals(row.productTotal || 0, row.quota || 0, row.completeQuota || row.quota || 0);
   const note = String(row.note || "").trim();
   const parts = [
-    `${row.member}（${row.subgroup || "未分队"}）：${status}`,
+    `${row.member}（自由编队：${row.subgroup || "未分队"}）：${status}`,
     `一级定额 ${fmt(row.quota)}`,
     `完全定额 ${fmt(row.completeQuota || row.quota || 0)}`,
     `成品量 ${fmt(row.productTotal || 0)}`,
@@ -3581,7 +3599,7 @@ function overviewGroupBriefReasonText(row, itemNames) {
   const status = row.status || quotaStatusFromTotals(row.productTotal || 0, row.quota || 0, row.completeQuota || row.quota || 0);
   const note = String(row.note || "").trim();
   const lines = [
-    `${row.member}（${row.subgroup || "未分队"}）：${status}`,
+    `${row.member}（自由编队：${row.subgroup || "未分队"}）：${status}`,
     `   一级定额：${fmt(row.quota)}｜完全定额：${fmt(row.completeQuota || row.quota || 0)}｜成品量：${fmt(row.productTotal || 0)}｜一级差额：${signedTotalText(row.diff)}｜完全差额：${signedTotalText(row.completeDiff ?? ((row.productTotal || 0) - (row.completeQuota || row.quota || 0)))}｜换算工作量：${fmt(row.weighted)}${row.dutyHours ? `｜尽本分时长：${fmtDutyHours(row.dutyHours)}` : ""}`,
     `   项目明细：${overviewGroupBriefItemDetail(row, itemNames)}`
   ];
@@ -3601,7 +3619,6 @@ function buildOverviewGroupBriefTextForRange(group, range, label, report = repor
   const totalDiff = totalProduct - totalQuota;
   const totalStatus = quotaStatusFromTotals(totalProduct, totalQuota, totalCompleteQuota);
   const totalDutyHours = groupRows.reduce((sum, row) => sum + Number(row.dutyHours || 0), 0);
-  const subgroupLines = overviewSubgroupBriefLines(groupRows);
   const detailLines = sortedOverviewGroupRows(groupRows).length
     ? sortedOverviewGroupRows(groupRows).map((row) => overviewGroupBriefReasonText(row, itemNames))
     : ["暂无成员数据。"];
@@ -3618,8 +3635,6 @@ function buildOverviewGroupBriefTextForRange(group, range, label, report = repor
     `一级差额：${totalDiff >= 0 ? "+" : ""}${fmt(totalDiff)}`,
     `完全差额：${signedTotalText(totalProduct - totalCompleteQuota)}`,
     `状态：${totalStatus}`,
-    "二级小组汇总：",
-    ...subgroupLines,
     "成员达标与项目明细：",
     ...detailLines
   ].join("\n");
@@ -3647,14 +3662,13 @@ function overviewGroupBriefRows(group, report = reportData()) {
   const totalDiff = totalProduct - totalQuota;
   const totalStatus = quotaStatusFromTotals(totalProduct, totalQuota, totalCompleteQuota);
   const totalDutyHours = groupRows.reduce((sum, row) => sum + Number(row.dutyHours || 0), 0);
-  const subgroupLines = overviewSubgroupBriefLines(groupRows);
   const reasonLines = sortedOverviewGroupRows(groupRows).length
     ? sortedOverviewGroupRows(groupRows).map((row) => overviewGroupBriefLine(row, itemNames))
     : ["暂无成员数据。"];
-  const noteLines = ["二级小组汇总：", ...subgroupLines, "", "成员达标与项目明细：", ...reasonLines];
+
   return [
     [styledCell(`${group} ${range.label}报数｜${rangeText(range)}`, "sTitle", { mergeAcross: 11 })],
-    ["小组", "范围", "一级定额", "完全定额", "成品量", "换算工作量", "尽本分时长", "视频成品", "AI成品", "一级差额", "状态", "二级小组与成员明细"].map((label) => styledCell(label, "sHeader")),
+    ["小组", "范围", "一级定额", "完全定额", "成品量", "换算工作量", "尽本分时长", "视频成品", "AI成品", "一级差额", "状态", "成员达标与项目明细"].map((label) => styledCell(label, "sHeader")),
     [
       styledCell(group, "sDate"),
       styledCell(rangeText(range), "sItem"),
@@ -3667,7 +3681,7 @@ function overviewGroupBriefRows(group, report = reportData()) {
       styledCell(totalAiProduct, "sTotal"),
       styledCell(totalDiff, totalDiff >= 0 ? "sDiffGood" : "sDiffBad"),
       styledCell(totalStatus, mixedExportStatusStyle(totalStatus)),
-      styledCell(noteLines.join("\n"), "sNote")
+      styledCell(reasonLines.join("\n"), "sNote")
     ]
   ];
 }
@@ -3701,6 +3715,109 @@ async function copyOverviewGroupBriefText(group) {
   try {
     await navigator.clipboard.writeText(text);
     showDialog("已复制TXT", "简报内容已经复制到剪贴板。", "");
+  } catch {
+    showDialog("复制失败", "浏览器没有允许写入剪贴板，可以先用“导出TXT”下载。", "");
+  }
+}
+function overviewRowsPrimaryGroupLabel(rows = [], report = reportData()) {
+  const groups = Array.from(new Set(rows.map((row) => report.memberGroups?.[row.member] || report.groups?.[0] || "未分组").filter(Boolean)));
+  return groups.length ? groups.join("、") : "无";
+}
+function overviewRowsBriefText(title, range, label, rows, itemNames, sourceLabel = "") {
+  const summary = summarizeOverviewRows(rows);
+  const detailLines = sortedOverviewGroupRows(rows).length
+    ? sortedOverviewGroupRows(rows).map((row) => overviewGroupBriefReasonText(row, itemNames))
+    : ["暂无成员数据。"];
+  return [
+    `${title} ${label}报数`,
+    `时间：${rangeText(range)}`,
+    sourceLabel ? `一级小组来源：${sourceLabel}` : "",
+    `一级定额：${fmt(summary.quota)}`,
+    `完全定额：${fmt(summary.completeQuota)}`,
+    `成品量：${fmt(summary.productTotal)}`,
+    `换算工作量：${fmt(summary.weighted)}`,
+    `尽本分时长：${fmtDutyHours(summary.dutyHours)}`,
+    `视频成品：${fmt(summary.video)}`,
+    `AI成品：${fmt(summary.ai)}`,
+    `一级差额：${signedTotalText(summary.diff)}`,
+    `完全差额：${signedTotalText(summary.completeDiff)}`,
+    `状态：${summary.status}`,
+    "成员达标与项目明细：",
+    ...detailLines
+  ].filter(Boolean).join("\n");
+}
+function overviewRowsBriefRows(title, range, rows, itemNames, sourceLabel = "") {
+  const summary = summarizeOverviewRows(rows);
+  const reasonLines = sortedOverviewGroupRows(rows).length
+    ? sortedOverviewGroupRows(rows).map((row) => overviewGroupBriefLine(row, itemNames))
+    : ["暂无成员数据。"];
+  const detailText = [sourceLabel ? `一级小组来源：${sourceLabel}` : "", ...reasonLines].filter(Boolean).join("\n");
+  return [
+    [styledCell(`${title}｜${rangeText(range)}`, "sTitle", { mergeAcross: 11 })],
+    ["对象", "范围", "一级定额", "完全定额", "成品量", "换算工作量", "尽本分时长", "视频成品", "AI成品", "一级差额", "状态", "成员达标与项目明细"].map((header) => styledCell(header, "sHeader")),
+    [
+      styledCell(title, "sDate"),
+      styledCell(rangeText(range), "sItem"),
+      styledCell(summary.quota, "sQuota"),
+      styledCell(summary.completeQuota, "sQuota"),
+      styledCell(summary.productTotal, "sTotal"),
+      styledCell(summary.weighted, "sTotal"),
+      styledCell(summary.dutyHours, "sTotal"),
+      styledCell(summary.video, "sTotal"),
+      styledCell(summary.ai, "sTotal"),
+      styledCell(summary.diff, summary.diff >= 0 ? "sDiffGood" : "sDiffBad"),
+      styledCell(summary.status, mixedExportStatusStyle(summary.status)),
+      styledCell(detailText, "sNote")
+    ]
+  ];
+}
+function overviewSubgroupRowsForRange(subgroup, range, report = reportData()) {
+  const days = buildDateRange(range.start, range.end);
+  const itemNames = configuredItems();
+  const selectedGroupSet = new Set(selectedOverviewGroups(report));
+  const rows = reportMembers(report)
+    .map((member) => aggregateMemberRange(member, days, report, itemNames))
+    .filter((row) => (row.subgroup || "未分队") === subgroup && selectedGroupSet.has(report.memberGroups?.[row.member] || report.groups?.[0]));
+  return { rows, itemNames };
+}
+function buildOverviewSubgroupBriefTextForRange(subgroup, range, label, report = reportData()) {
+  const { rows, itemNames } = overviewSubgroupRowsForRange(subgroup, range, report);
+  return overviewRowsBriefText(`${subgroup} 二级自由编队`, range, label, rows, itemNames, overviewRowsPrimaryGroupLabel(rows, report));
+}
+function buildOverviewSubgroupBriefText(subgroup, report = reportData()) {
+  const range = overviewRangeInfo();
+  if (overviewRangeMode === "week") {
+    return buildDateRange(range.start, range.end)
+      .map((day) => buildOverviewSubgroupBriefTextForRange(subgroup, { start: day, end: day }, "今日", report))
+      .join("\n\n");
+  }
+  return buildOverviewSubgroupBriefTextForRange(subgroup, range, range.label, report);
+}
+function overviewSubgroupBriefRows(subgroup, report = reportData()) {
+  const range = overviewRangeInfo();
+  const { rows, itemNames } = overviewSubgroupRowsForRange(subgroup, range, report);
+  return overviewRowsBriefRows(`${subgroup} 二级自由编队`, range, rows, itemNames, overviewRowsPrimaryGroupLabel(rows, report));
+}
+function exportOverviewSubgroupBrief(subgroup) {
+  const report = selectedReportData();
+  const rows = withReportData(report, () => overviewSubgroupBriefRows(subgroup, report));
+  const range = overviewRangeInfo();
+  const safeName = String(subgroup || "subgroup").replace(/[\\/:*?"<>|]/g, "_");
+  downloadBlob(buildXlsxWorkbook(`${safeName}自由编队简报`, rows, [120, 150, 90, 90, 100, 100, 90, 90, 90, 90, 90, 460]), `overview_subgroup_${safeName}_${range.start}_${range.end}.xlsx`);
+}
+function exportOverviewSubgroupBriefText(subgroup) {
+  const report = selectedReportData();
+  const text = withReportData(report, () => buildOverviewSubgroupBriefText(subgroup, report));
+  const range = overviewRangeInfo();
+  const safeName = String(subgroup || "subgroup").replace(/[\\/:*?"<>|]/g, "_");
+  downloadBlob(new Blob([`\ufeff${text}`], { type: "text/plain;charset=utf-8" }), `overview_subgroup_${safeName}_${range.start}_${range.end}.txt`);
+}
+async function copyOverviewSubgroupBriefText(subgroup) {
+  const report = selectedReportData();
+  const text = withReportData(report, () => buildOverviewSubgroupBriefText(subgroup, report));
+  try {
+    await navigator.clipboard.writeText(text);
+    showDialog("已复制TXT", "二级自由编队简报已经复制到剪贴板。", "");
   } catch {
     showDialog("复制失败", "浏览器没有允许写入剪贴板，可以先用“导出TXT”下载。", "");
   }
@@ -3774,7 +3891,7 @@ function renderOverview() {
         <span>${escapeHtml(row.member)}</span>
         <span class="status ${quotaStatusClass(row.status)}">${quotaStatusShort(row.status)}</span>
       </div>
-      <div class="subgroup-pill">二级小组 ${escapeHtml(row.subgroup || "未分队")}</div>
+      <div class="subgroup-pill">自由编队 ${escapeHtml(row.subgroup || "未分队")}</div>
       <div class="progress" title="${row.rate}%"><span style="--w:${row.rate}%"></span></div>
       <div class="hint">成品量 ${fmt(row.productTotal || 0)} / ${quotaLabel} ${fmt(row.quota)} / 完全 ${fmt(row.completeQuota)}</div>
       <div class="hint">一级差额 ${signedTotalText(row.diff)} · 完全差额 ${signedTotalText(row.completeDiff)}</div>
@@ -3784,21 +3901,9 @@ function renderOverview() {
       <div class="hint">${escapeHtml(row.note || "暂无备注")}</div>
     </article>
   `;
-  $("overviewGrid").innerHTML = visibleGroups.map((group) => {
+  const primaryGroupHtml = visibleGroups.map((group) => {
     const groupRows = rows.filter((row) => (report.memberGroups?.[row.member] || report.groups[0]) === group);
     const groupSummary = summarizeOverviewRows(groupRows);
-    const subgroupBlocks = groupRowsBySubgroup(groupRows).map(({ name, rows: subgroupRows }) => {
-      const subgroupSummary = summarizeOverviewRows(subgroupRows);
-      return `
-        <details class="overview-subgroup" open>
-          <summary>
-            <span>${escapeHtml(name)} · ${subgroupRows.length} 人</span>
-            <strong>${fmt(subgroupSummary.productTotal)} / ${fmt(subgroupSummary.quota)} / ${fmt(subgroupSummary.completeQuota)}<small> · ${subgroupSummary.status} · 换算 ${fmt(subgroupSummary.weighted)}</small></strong>
-          </summary>
-          <div class="member-grid">${subgroupRows.map(rowCard).join("")}</div>
-        </details>
-      `;
-    }).join("");
     return `
       <details class="overview-group" open>
         <summary>
@@ -3810,10 +3915,40 @@ function renderOverview() {
             <button class="overview-export-btn" type="button" data-overview-copy-text-group="${escapeAttr(group)}">复制</button>
           </span>
         </summary>
-        <div class="overview-subgroup-list">${subgroupBlocks || `<div class="hint">这个分组还没有成员。</div>`}</div>
+        <div class="member-grid">${groupRows.map(rowCard).join("") || `<div class="hint">这个分组还没有成员。</div>`}</div>
       </details>
     `;
   }).join("");
+  const freeSubgroups = groupRowsBySubgroup(rows);
+  const freeSubgroupHtml = freeSubgroups.length ? `
+      <details class="overview-group overview-free-groups" open>
+        <summary>
+          <span>二级自由编队 · ${freeSubgroups.length} 个</span>
+          <strong>独立于一级小组<small> · 当前一级范围内 ${rows.length} 人</small></strong>
+        </summary>
+        <div class="overview-subgroup-list">
+          ${freeSubgroups.map(({ name, rows: subgroupRows }) => {
+            const subgroupSummary = summarizeOverviewRows(subgroupRows);
+            const sourceGroups = overviewRowsPrimaryGroupLabel(subgroupRows, report);
+            return `
+              <details class="overview-subgroup" open>
+                <summary>
+                  <span>${escapeHtml(name)} · ${subgroupRows.length} 人<small> · 来自 ${escapeHtml(sourceGroups)}</small></span>
+                  <strong>${fmt(subgroupSummary.productTotal)} / ${fmt(subgroupSummary.quota)} / ${fmt(subgroupSummary.completeQuota)}<small> · ${subgroupSummary.status} · 换算 ${fmt(subgroupSummary.weighted)}</small></strong>
+                  <span class="overview-export-actions">
+                    <button class="overview-export-btn" type="button" data-overview-export-subgroup="${escapeAttr(name)}">表格</button>
+                    <button class="overview-export-btn" type="button" data-overview-export-text-subgroup="${escapeAttr(name)}">TXT</button>
+                    <button class="overview-export-btn" type="button" data-overview-copy-text-subgroup="${escapeAttr(name)}">复制</button>
+                  </span>
+                </summary>
+                <div class="member-grid">${subgroupRows.map(rowCard).join("")}</div>
+              </details>
+            `;
+          }).join("")}
+        </div>
+      </details>
+    ` : "";
+  $("overviewGrid").innerHTML = primaryGroupHtml + freeSubgroupHtml;
   $("overviewGrid").querySelectorAll("[data-overview-member]").forEach((card) => {
     card.onclick = () => {
       selectOverviewMember(card.dataset.overviewMember, report);
@@ -3838,6 +3973,27 @@ function renderOverview() {
       event.preventDefault();
       event.stopPropagation();
       copyOverviewGroupBriefText(button.dataset.overviewCopyTextGroup || "");
+    };
+  });
+  $("overviewGrid").querySelectorAll("[data-overview-export-subgroup]").forEach((button) => {
+    button.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      exportOverviewSubgroupBrief(button.dataset.overviewExportSubgroup || "");
+    };
+  });
+  $("overviewGrid").querySelectorAll("[data-overview-export-text-subgroup]").forEach((button) => {
+    button.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      exportOverviewSubgroupBriefText(button.dataset.overviewExportTextSubgroup || "");
+    };
+  });
+  $("overviewGrid").querySelectorAll("[data-overview-copy-text-subgroup]").forEach((button) => {
+    button.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      copyOverviewSubgroupBriefText(button.dataset.overviewCopyTextSubgroup || "");
     };
   });
   const detailPick = renderGroupMemberSelectors("overviewDetailGroup", "overviewDetailMember", overviewDetailGroup, overviewDetailMember);
