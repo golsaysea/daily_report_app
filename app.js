@@ -3199,30 +3199,44 @@ function renderDetailSummaryGrid(containerId, itemTotals, stats) {
   }).join("");
   box.innerHTML = statCards + (itemCards || `<div class="hint">这个范围还没有项目数据。</div>`);
 }
-function overviewGroupBriefLine(row, itemNames) {
-  const items = itemNames
+function overviewGroupBriefItemDetail(row, itemNames) {
+  return itemNames
     .map((name) => [name, Number(row.items?.[name] || 0)])
     .filter(([, amount]) => amount)
     .map(([name, amount]) => `${name}${fmt(amount)}`)
-    .join(" ");
+    .join("，") || "无项目数";
+}
+function sortedOverviewGroupRows(rows = []) {
+  return [...rows].sort((a, b) => {
+    const diff = Number(a.diff || 0) - Number(b.diff || 0);
+    if (diff) return diff;
+    return String(a.member || "").localeCompare(String(b.member || ""), "zh-CN");
+  });
+}
+function overviewGroupBriefLine(row, itemNames) {
+  const status = row.diff >= 0 ? "达标" : "未达标";
   const note = String(row.note || "").trim();
   const parts = [
-    `${row.member}${row.diff >= 0 ? "+" : ""}${fmt(row.diff)}`,
-    row.dutyHours ? `尽本分${fmtDutyHours(row.dutyHours)}` : "",
-    note,
-    items
+    `${row.member}：${status}`,
+    `定额 ${fmt(row.quota)}`,
+    `实际 ${fmt(row.weighted)}`,
+    `差额 ${signedTotalText(row.diff)}`,
+    row.dutyHours ? `尽本分 ${fmtDutyHours(row.dutyHours)}` : "",
+    `项目 ${overviewGroupBriefItemDetail(row, itemNames)}`,
+    note ? `备注 ${note}` : ""
   ].filter(Boolean);
-  return parts.join(" ");
+  return parts.join("｜");
 }
 function overviewGroupBriefReasonText(row, itemNames) {
-  const items = itemNames
-    .map((name) => [name, Number(row.items?.[name] || 0)])
-    .filter(([, amount]) => amount)
-    .map(([name, amount]) => `${name}${fmt(amount)}`)
-    .join(" ");
+  const status = row.diff >= 0 ? "达标" : "未达标";
   const note = String(row.note || "").trim();
-  const detail = [`差额 ${row.diff >= 0 ? "+" : ""}${fmt(row.diff)}`, row.dutyHours ? `尽本分 ${fmtDutyHours(row.dutyHours)}` : "", note, items].filter(Boolean).join(" ");
-  return `${row.member}：\n   ${detail || "暂无原因"}`;
+  const lines = [
+    `${row.member}：${status}`,
+    `   定额：${fmt(row.quota)}｜实际完成数：${fmt(row.weighted)}｜差额：${signedTotalText(row.diff)}${row.dutyHours ? `｜尽本分时长：${fmtDutyHours(row.dutyHours)}` : ""}`,
+    `   项目明细：${overviewGroupBriefItemDetail(row, itemNames)}`
+  ];
+  if (note) lines.push(`   备注：${note}`);
+  return lines.join("\n");
 }
 function buildOverviewGroupBriefTextForRange(group, range, label, report = reportData()) {
   const days = buildDateRange(range.start, range.end);
@@ -3234,10 +3248,9 @@ function buildOverviewGroupBriefTextForRange(group, range, label, report = repor
   const totalVideoProduct = groupRows.reduce((sum, row) => sum + productTotalsForItems(row.items, itemNames, report).video, 0);
   const totalAiProduct = groupRows.reduce((sum, row) => sum + productTotalsForItems(row.items, itemNames, report).ai, 0);
   const totalDutyHours = groupRows.reduce((sum, row) => sum + Number(row.dutyHours || 0), 0);
-  const behindRows = groupRows.filter((row) => row.diff < 0).sort((a, b) => a.diff - b.diff);
-  const reasonLines = behindRows.length
-    ? behindRows.map((row) => overviewGroupBriefReasonText(row, itemNames))
-    : ["全部成员达标，暂无未完成原因。"];
+  const detailLines = sortedOverviewGroupRows(groupRows).length
+    ? sortedOverviewGroupRows(groupRows).map((row) => overviewGroupBriefReasonText(row, itemNames))
+    : ["暂无成员数据。"];
   return [
     `${group} ${label}报数`,
     `时间：${rangeText(range)}`,
@@ -3247,8 +3260,8 @@ function buildOverviewGroupBriefTextForRange(group, range, label, report = repor
     `视频成品：${fmt(totalVideoProduct)}`,
     `AI成品：${fmt(totalAiProduct)}`,
     `差额：${totalDiff >= 0 ? "+" : ""}${fmt(totalDiff)}`,
-    "差额多的是谁，原因是什么：",
-    ...reasonLines
+    "成员达标与项目明细：",
+    ...detailLines
   ].join("\n");
 }
 function buildOverviewGroupBriefText(group, report = reportData()) {
@@ -3271,13 +3284,12 @@ function overviewGroupBriefRows(group, report = reportData()) {
   const totalVideoProduct = groupRows.reduce((sum, row) => sum + productTotalsForItems(row.items, itemNames, report).video, 0);
   const totalAiProduct = groupRows.reduce((sum, row) => sum + productTotalsForItems(row.items, itemNames, report).ai, 0);
   const totalDutyHours = groupRows.reduce((sum, row) => sum + Number(row.dutyHours || 0), 0);
-  const behindRows = groupRows.filter((row) => row.diff < 0).sort((a, b) => a.diff - b.diff);
-  const reasonLines = behindRows.length
-    ? behindRows.map((row) => overviewGroupBriefLine(row, itemNames))
-    : ["全部成员达标，暂无未完成原因。"];
+  const reasonLines = sortedOverviewGroupRows(groupRows).length
+    ? sortedOverviewGroupRows(groupRows).map((row) => overviewGroupBriefLine(row, itemNames))
+    : ["暂无成员数据。"];
   return [
     [styledCell(`${group} ${range.label}报数｜${rangeText(range)}`, "sTitle", { mergeAcross: 8 })],
-    ["小组", "范围", "定额", "实际完成数", "尽本分时长", "视频成品", "AI成品", "差额", "差额多的是谁，原因是什么"].map((label) => styledCell(label, "sHeader")),
+    ["小组", "范围", "定额", "实际完成数", "尽本分时长", "视频成品", "AI成品", "差额", "成员达标与项目明细"].map((label) => styledCell(label, "sHeader")),
     [
       styledCell(group, "sDate"),
       styledCell(rangeText(range), "sItem"),
