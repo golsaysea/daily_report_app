@@ -10,6 +10,7 @@ const defaultData = {
   groupItems: {},
   memberItems: {},
   memberQuotas: {},
+  memberWorkloadNotes: {},
   dailyQuotas: {},
   monthlyPlans: {},
   freeTable: { rows: 20, columns: 8, cells: {}, updated_at: "" },
@@ -158,6 +159,7 @@ function compactCloudSyncData(mode = "records") {
     groupItems: data.groupItems,
     memberItems: data.memberItems,
     memberQuotas: data.memberQuotas,
+    memberWorkloadNotes: data.memberWorkloadNotes,
     dailyQuotas,
     checkinOptions: data.checkinOptions,
     records
@@ -427,6 +429,7 @@ function normalize(source) {
     if (!Array.isArray(groupItems[group])) groupItems[group] = Object.keys(rules);
   });
   const memberQuotas = { ...(loaded.memberQuotas || {}) };
+  const memberWorkloadNotes = loaded.memberWorkloadNotes && typeof loaded.memberWorkloadNotes === "object" ? clone(loaded.memberWorkloadNotes) : {};
   const dailyQuotas = loaded.dailyQuotas && typeof loaded.dailyQuotas === "object" ? clone(loaded.dailyQuotas) : {};
   const monthlyPlans = normalizeMonthlyPlans(loaded.monthlyPlans || {});
   const freeTable = normalizeFreeTable(loaded.freeTable || defaultData.freeTable);
@@ -449,6 +452,7 @@ function normalize(source) {
     groupItems,
     memberItems,
     memberQuotas,
+    memberWorkloadNotes,
     dailyQuotas,
     monthlyPlans,
     freeTable,
@@ -711,6 +715,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.groupItems = clone(local.groupItems || {});
     merged.memberItems = clone(local.memberItems || {});
     merged.memberQuotas = clone(local.memberQuotas || {});
+    merged.memberWorkloadNotes = clone(local.memberWorkloadNotes || {});
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
     merged.monthlyPlans = mergeMonthlyPlans(remote.monthlyPlans, local.monthlyPlans);
     merged.freeTable = mergeFreeTable(remote.freeTable, local.freeTable);
@@ -734,6 +739,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.groupItems = clone(remote.groupItems || local.groupItems || {});
     merged.memberItems = clone(remote.memberItems || local.memberItems || {});
     merged.memberQuotas = clone(remote.memberQuotas || local.memberQuotas || {});
+    merged.memberWorkloadNotes = clone(remote.memberWorkloadNotes || local.memberWorkloadNotes || {});
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
     merged.monthlyPlans = mergeMonthlyPlans(local.monthlyPlans, remote.monthlyPlans);
     merged.freeTable = mergeFreeTable(remote.freeTable, local.freeTable);
@@ -769,6 +775,7 @@ function mergeSummaryData(baseSource, sourceData) {
     groupItems: { ...base.groupItems, ...source.groupItems },
     memberItems: { ...base.memberItems, ...source.memberItems },
     memberQuotas: { ...base.memberQuotas, ...source.memberQuotas },
+    memberWorkloadNotes: { ...base.memberWorkloadNotes, ...source.memberWorkloadNotes },
     hiddenMembers: { ...base.hiddenMembers, ...source.hiddenMembers },
     dailyQuotas: mergeDailyQuotas(base.dailyQuotas, source.dailyQuotas, "records"),
     monthlyPlans: mergeMonthlyPlans(base.monthlyPlans, source.monthlyPlans),
@@ -795,6 +802,7 @@ function mergeAdminCenterData(baseSource, sourceData) {
     groupItems: { ...source.groupItems, ...base.groupItems },
     memberItems: { ...source.memberItems, ...base.memberItems },
     memberQuotas: { ...source.memberQuotas, ...base.memberQuotas },
+    memberWorkloadNotes: { ...source.memberWorkloadNotes, ...base.memberWorkloadNotes },
     hiddenMembers: { ...source.hiddenMembers, ...base.hiddenMembers },
     dailyQuotas: mergeDailyQuotas(source.dailyQuotas, base.dailyQuotas, "records"),
     monthlyPlans: mergeMonthlyPlans(source.monthlyPlans, base.monthlyPlans),
@@ -816,6 +824,7 @@ function makeEmptySummary(seed = data) {
   empty.groupItems = {};
   empty.memberItems = {};
   empty.memberQuotas = {};
+  empty.memberWorkloadNotes = {};
   empty.dailyQuotas = {};
   empty.monthlyPlans = {};
   empty.freeTable = defaultFreeTable();
@@ -850,6 +859,7 @@ function scopedSourceData(sourceData, label, existingMembers = new Set()) {
     scoped.memberGroups[nextMember] = groupMap[sourceGroup] || `${sourceLabel} / ${sourceGroup}`;
     if (source.memberItems?.[member]) scoped.memberItems[nextMember] = clone(source.memberItems[member]);
     if (source.memberQuotas?.[member] !== undefined) scoped.memberQuotas[nextMember] = source.memberQuotas[member];
+    if (source.memberWorkloadNotes?.[member] !== undefined) scoped.memberWorkloadNotes[nextMember] = source.memberWorkloadNotes[member];
   });
   Object.entries(source.dailyQuotas || {}).forEach(([day, entry]) => {
     scoped.dailyQuotas[day] = { default: entry.default ?? "", members: {} };
@@ -2121,24 +2131,34 @@ function aggregatePeriod(days, scope, member) {
     let raw = 0;
     let quota = 0;
     let dutyHours = 0;
+    let video = 0;
+    let ai = 0;
     members.forEach((name) => {
       const rec = recordFor(day, name);
       const memberItems = rec?.items || {};
-      weighted += Number(rec?.weighted_total || 0);
-      raw += Number(rec?.raw_total || 0);
+      const totals = totalsForItems(memberItems, itemNames, report);
+      const products = productTotalsForItems(memberItems, itemNames, report);
+      weighted += totals.weighted;
+      raw += totals.raw;
+      video += products.video;
+      ai += products.ai;
       quota += memberQuota(name, day);
       dutyHours += dutyHoursValue(rec);
       itemNames.forEach((item) => {
         itemTotals[item] += Number(memberItems[item] || 0);
       });
     });
-    return { day, raw, weighted, quota, dutyHours, diff: weighted - quota };
+    const productTotal = productTotalValue({ video, ai });
+    return { day, raw, weighted, quota, dutyHours, video, ai, productTotal, diff: productTotal - quota };
   });
   const weighted = daily.reduce((sum, row) => sum + row.weighted, 0);
   const quota = daily.reduce((sum, row) => sum + row.quota, 0);
   const raw = daily.reduce((sum, row) => sum + row.raw, 0);
   const dutyHours = daily.reduce((sum, row) => sum + Number(row.dutyHours || 0), 0);
-  return { daily, raw, weighted, quota, dutyHours, diff: weighted - quota, itemTotals };
+  const video = daily.reduce((sum, row) => sum + Number(row.video || 0), 0);
+  const ai = daily.reduce((sum, row) => sum + Number(row.ai || 0), 0);
+  const productTotal = productTotalValue({ video, ai });
+  return { daily, raw, weighted, quota, dutyHours, video, ai, productTotal, diff: productTotal - quota, itemTotals };
 }
 function renderMiniBars(containerId, rows, valueKey = "weighted") {
   const max = Math.max(...rows.map((row) => Math.abs(Number(row[valueKey] || 0))), 1);
@@ -2201,6 +2221,9 @@ function productTotalsForItems(items = {}, itemNames = configuredItems(), report
     totals.ai += amount * Number(rule.ai || 0);
     return totals;
   }, { video: 0, ai: 0 });
+}
+function productTotalValue(products = {}) {
+  return Number(products.video || 0) + Number(products.ai || 0);
 }
 function memberVisibleItems(member = currentMember) {
   const group = data.memberGroups?.[member] || data.groups[0];
@@ -2427,7 +2450,7 @@ function renderEntryInputs(seedItems = readEntryInputs()) {
       <div class="entry-field">
         <label>${escapeHtml(name)}</label>
         <input type="number" step="0.01" inputmode="decimal" data-entry-item="${escapeAttr(name)}" value="${value || ""}" placeholder="0">
-        <small>工作量系数 ${fmt(weight)}</small>
+        <small>换算系数 ${fmt(weight)}</small>
       </div>
     `;
   }).join("");
@@ -2447,7 +2470,8 @@ function preview() {
   const parsed = { items, ...entryTotals(items) };
   const products = productTotalsForItems(items, Object.keys(items), data);
   const quota = memberQuota(currentMember);
-  const passed = parsed.weighted >= quota;
+  const productTotal = productTotalValue(products);
+  const passed = productTotal >= quota;
   $("rawTotal").textContent = fmt(parsed.raw);
   $("weightedTotal").textContent = fmt(parsed.weighted);
   if ($("videoProductTotal")) $("videoProductTotal").textContent = fmt(products.video);
@@ -2492,7 +2516,9 @@ function saveFormSilently() {
   $("entryText").value = itemsToText(items);
   const quota = memberQuota(currentMember);
   const dutyHours = normalizeDutyHours($("dutyHoursInput")?.value);
-  const autoStatus = parsed.weighted >= quota ? "达标" : "不达标";
+  const products = productTotalsForItems(items, Object.keys(items), data);
+  const productTotal = productTotalValue(products);
+  const autoStatus = productTotal >= quota ? "达标" : "不达标";
   const selected = $("statusSelect").value;
   const rec = currentRecord();
   const finalStatus = selected === "自动判断" ? "待审核" : selected;
@@ -2567,7 +2593,7 @@ function renderMembers() {
       const defaultQuota = data.memberQuotas[name] === "" || data.memberQuotas[name] === undefined ? data.quota : data.memberQuotas[name];
       const btn = document.createElement("button");
       btn.className = `member ${name === currentMember ? "active" : ""}`;
-      btn.innerHTML = `<span><span>${escapeHtml(name)}</span><small>今日 ${fmt(todayQuota)} · 默认 ${fmt(defaultQuota)}</small></span><span class="badge">${memberTodayStatus(name)}</span>`;
+      btn.innerHTML = `<span><span>${escapeHtml(name)}</span><small>今日成品 ${fmt(todayQuota)} · 默认 ${fmt(defaultQuota)}</small></span><span class="badge">${memberTodayStatus(name)}</span>`;
       btn.onclick = () => {
         saveFormSilently();
         currentMember = name;
@@ -2623,7 +2649,7 @@ function renderRules() {
     <div class="rule-row config-head">
       <span></span>
       <span>项目</span>
-      <span>工作量</span>
+      <span>换算工作量</span>
       <span>视频成品</span>
       <span>AI成品</span>
       <span></span>
@@ -2636,7 +2662,7 @@ function renderRules() {
     row.innerHTML = `
       <label class="member-row-check" title="勾选后可批量删除"><input type="checkbox" data-rule-select="${escapeAttr(name)}"></label>
       <input value="${escapeAttr(name)}" aria-label="项目">
-      <input type="number" step="0.01" value="${Number(weight)}" aria-label="工作量系数" title="工作量系数">
+      <input type="number" step="0.01" value="${Number(weight)}" aria-label="换算工作量系数" title="换算工作量系数">
       <input type="number" step="0.01" value="${Number(productRule.video || 0)}" aria-label="视频成品系数" title="视频成品系数">
       <input type="number" step="0.01" value="${Number(productRule.ai || 0)}" aria-label="AI成品系数" title="AI成品系数">
       <button class="icon" title="删除">×</button>
@@ -2667,8 +2693,9 @@ function renderMemberQuotas() {
   $("memberQuotaBox").innerHTML = `
     <div class="quota-row config-head">
       <span>成员</span>
-      <span>默认定额</span>
-      <span>当天定额</span>
+      <span>默认成品定额</span>
+      <span>当天成品定额</span>
+      <span>换算工作量备注</span>
       <span></span>
     </div>
   `;
@@ -2686,8 +2713,9 @@ function renderMemberQuotas() {
     const dayOwn = data.dailyQuotas?.[selectedDay]?.members?.[name];
     row.innerHTML = `
       <input value="${escapeAttr(name)}" aria-label="成员">
-      <input type="number" step="0.01" min="0" placeholder="${fmt(data.quota)}" value="${own === "" ? "" : Number(own)}" aria-label="成员定额">
-      <input type="number" step="0.01" min="0" placeholder="${fmt(memberQuota(name, selectedDay))}" value="${dayOwn === undefined || dayOwn === null ? "" : Number(dayOwn)}" aria-label="当天定额">
+      <input type="number" step="0.01" min="0" placeholder="${fmt(data.quota)}" value="${own === "" ? "" : Number(own)}" aria-label="成员成品定额">
+      <input type="number" step="0.01" min="0" placeholder="${fmt(memberQuota(name, selectedDay))}" value="${dayOwn === undefined || dayOwn === null ? "" : Number(dayOwn)}" aria-label="当天成品定额">
+      <input type="text" value="${escapeAttr(data.memberWorkloadNotes?.[name] || "")}" placeholder="仅备注，不参与达标" aria-label="换算工作量备注">
       <button class="icon" title="隐藏成员">隐</button>
     `;
     const inputs = row.querySelectorAll("input");
@@ -2701,6 +2729,13 @@ function renderMemberQuotas() {
       setDailyMemberQuota(name, selectedDay, inputs[2].value);
       preview();
       renderOverview();
+      scheduleSave("admin");
+    };
+    inputs[3].oninput = () => {
+      if (!data.memberWorkloadNotes || typeof data.memberWorkloadNotes !== "object") data.memberWorkloadNotes = {};
+      const note = inputs[3].value.trim();
+      if (note) data.memberWorkloadNotes[name] = note;
+      else delete data.memberWorkloadNotes[name];
       scheduleSave("admin");
     };
     row.querySelector("button").onclick = () => removeMember(name);
@@ -2951,6 +2986,10 @@ function renameMember(oldName, newName) {
     data.memberQuotas[newName] = data.memberQuotas[oldName];
     delete data.memberQuotas[oldName];
   }
+  if (data.memberWorkloadNotes?.[oldName] !== undefined) {
+    data.memberWorkloadNotes[newName] = data.memberWorkloadNotes[oldName];
+    delete data.memberWorkloadNotes[oldName];
+  }
   if (data.memberGroups[oldName] !== undefined) {
     data.memberGroups[newName] = data.memberGroups[oldName];
     delete data.memberGroups[oldName];
@@ -3071,30 +3110,34 @@ function aggregateMemberRange(member, days, report, itemNames) {
   let checkinCount = 0;
   days.forEach((day) => {
     const rec = recordForReport(report, day, member);
-    raw += Number(rec?.raw_total || 0);
-    weighted += Number(rec?.weighted_total || 0);
+    const memberItems = rec?.items || {};
+    const totals = totalsForItems(memberItems, itemNames, report);
+    raw += totals.raw;
+    weighted += totals.weighted;
     quota += memberQuota(member, day);
     dutyHours += dutyHoursValue(rec);
     itemNames.forEach((name) => {
-      items[name] += Number(rec?.items?.[name] || 0);
+      items[name] += Number(memberItems?.[name] || 0);
     });
     checkinCount += checkinPeriods().filter((period) => checkinStatus(rec?.checkins?.[period.key])).length;
   });
   const checkinSlots = days.length * checkinPeriods().length;
-  const rate = quota > 0 ? Math.min(100, Math.round((weighted / quota) * 100)) : 100;
   const products = productTotalsForItems(items, itemNames, report);
+  const productTotal = productTotalValue(products);
+  const rate = quota > 0 ? Math.min(100, Math.round((productTotal / quota) * 100)) : 100;
   return {
     member,
     records,
     items,
     raw,
     weighted,
+    productTotal,
     quota,
     dutyHours,
-    diff: weighted - quota,
+    diff: productTotal - quota,
     video: products.video,
     ai: products.ai,
-    passed: weighted >= quota,
+    passed: productTotal >= quota,
     rate,
     checkinCount,
     checkinSlots,
@@ -3144,11 +3187,13 @@ function mixedMonthlyMemberRow(member, info, itemNames, report) {
   const plan = mixedMonthlyPlanFor(report, info.mode, info.nextMonth, member, itemNames);
   const planTotals = totalsForItems(plan.items, itemNames, report);
   const planProducts = productTotalsForItems(plan.items, itemNames, report);
+  const planProductTotal = productTotalValue(planProducts);
   const planQuotaValue = quotaValue(plan.quota);
   const defaultPlanQuota = nextActual.quota;
   const planQuota = planQuotaValue === null ? defaultPlanQuota : planQuotaValue;
-  const planDiff = nextActual.weighted - planQuota;
-  const planRate = planQuota > 0 ? Math.round(nextActual.weighted / planQuota * 100) : 0;
+  const planActual = nextActual.productTotal;
+  const planDiff = planActual - planQuota;
+  const planRate = planQuota > 0 ? Math.round(planActual / planQuota * 100) : 0;
   const deltaItems = Object.fromEntries(itemNames.map((name) => [name, Number(current.items?.[name] || 0) - Number(previous.items?.[name] || 0)]));
   return {
     member,
@@ -3156,6 +3201,7 @@ function mixedMonthlyMemberRow(member, info, itemNames, report) {
     previous,
     delta: {
       items: deltaItems,
+      productTotal: current.productTotal - previous.productTotal,
       weighted: current.weighted - previous.weighted,
       video: current.video - previous.video,
       ai: current.ai - previous.ai
@@ -3163,12 +3209,13 @@ function mixedMonthlyMemberRow(member, info, itemNames, report) {
     plan: {
       rawQuota: plan.quota,
       items: plan.items,
+      productTotal: planProductTotal,
       weighted: planTotals.weighted,
       video: planProducts.video,
       ai: planProducts.ai,
       quota: planQuota,
       defaultQuota: defaultPlanQuota,
-      actual: nextActual.weighted,
+      actual: planActual,
       diff: planDiff,
       rate: planRate
     }
@@ -3177,13 +3224,18 @@ function mixedMonthlyMemberRow(member, info, itemNames, report) {
 function sumMonthlyRows(rows, itemNames) {
   const sumPart = (field) => {
     const items = Object.fromEntries(itemNames.map((name) => [name, rows.reduce((sum, row) => sum + Number(row[field].items?.[name] || 0), 0)]));
+    const video = rows.reduce((sum, row) => sum + Number(row[field].video || 0), 0);
+    const ai = rows.reduce((sum, row) => sum + Number(row[field].ai || 0), 0);
+    const productTotal = rows.reduce((sum, row) => sum + Number(row[field].productTotal || 0), 0);
+    const quota = rows.reduce((sum, row) => sum + Number(row[field].quota || 0), 0);
     return {
       items,
+      productTotal,
       weighted: rows.reduce((sum, row) => sum + Number(row[field].weighted || 0), 0),
-      quota: rows.reduce((sum, row) => sum + Number(row[field].quota || 0), 0),
-      diff: rows.reduce((sum, row) => sum + Number(row[field].diff || 0), 0),
-      video: rows.reduce((sum, row) => sum + Number(row[field].video || 0), 0),
-      ai: rows.reduce((sum, row) => sum + Number(row[field].ai || 0), 0)
+      quota,
+      diff: productTotal - quota,
+      video,
+      ai
     };
   };
   const deltaItems = Object.fromEntries(itemNames.map((name) => [name, rows.reduce((sum, row) => sum + Number(row.delta.items?.[name] || 0), 0)]));
@@ -3196,12 +3248,14 @@ function sumMonthlyRows(rows, itemNames) {
     previous: sumPart("previous"),
     delta: {
       items: deltaItems,
+      productTotal: rows.reduce((sum, row) => sum + Number(row.delta.productTotal || 0), 0),
       weighted: rows.reduce((sum, row) => sum + Number(row.delta.weighted || 0), 0),
       video: rows.reduce((sum, row) => sum + Number(row.delta.video || 0), 0),
       ai: rows.reduce((sum, row) => sum + Number(row.delta.ai || 0), 0)
     },
     plan: {
       items: planItems,
+      productTotal: rows.reduce((sum, row) => sum + Number(row.plan.productTotal || 0), 0),
       weighted: rows.reduce((sum, row) => sum + Number(row.plan.weighted || 0), 0),
       video: rows.reduce((sum, row) => sum + Number(row.plan.video || 0), 0),
       ai: rows.reduce((sum, row) => sum + Number(row.plan.ai || 0), 0),
@@ -3227,12 +3281,14 @@ function renderDetailSummaryGrid(containerId, itemTotals, stats) {
   if (!box) return;
   const itemEntries = Object.entries(itemTotals || {});
   const maxItem = Math.max(...itemEntries.map(([, amount]) => Math.abs(Number(amount || 0))), 1);
+  const productTotal = stats.productTotal ?? productTotalValue({ video: stats.video, ai: stats.ai });
   const statCards = [
     { label: "原始合计", value: fmt(stats.raw || 0) },
-    { label: "工作量合计", value: fmt(stats.weighted || 0), strong: true },
-    { label: stats.quotaLabel || "周期定额", value: fmt(stats.quota || 0) },
+    { label: "成品量合计", value: fmt(productTotal || 0), strong: true },
+    { label: "换算工作量", value: fmt(stats.weighted || 0) },
+    { label: stats.quotaLabel || "周期成品定额", value: fmt(stats.quota || 0) },
     { label: "尽本分时长", value: fmtDutyHours(stats.dutyHours || 0) },
-    { label: "总差额", value: `${(stats.diff || 0) >= 0 ? "+" : ""}${fmt(stats.diff || 0)}`, tone: (stats.diff || 0) >= 0 ? "good" : "bad" }
+    { label: "成品差额", value: `${(stats.diff || 0) >= 0 ? "+" : ""}${fmt(stats.diff || 0)}`, tone: (stats.diff || 0) >= 0 ? "good" : "bad" }
   ].map((item) => `
     <div class="item-total-card stat ${item.strong ? "featured" : ""} ${item.tone || ""}">
       <span>${escapeHtml(item.label)}</span>
@@ -3270,9 +3326,10 @@ function overviewGroupBriefLine(row, itemNames) {
   const note = String(row.note || "").trim();
   const parts = [
     `${row.member}：${status}`,
-    `定额 ${fmt(row.quota)}`,
-    `实际 ${fmt(row.weighted)}`,
+    `成品定额 ${fmt(row.quota)}`,
+    `成品量 ${fmt(row.productTotal || 0)}`,
     `差额 ${signedTotalText(row.diff)}`,
+    `换算工作量 ${fmt(row.weighted)}`,
     row.dutyHours ? `尽本分 ${fmtDutyHours(row.dutyHours)}` : "",
     `项目 ${overviewGroupBriefItemDetail(row, itemNames)}`,
     note ? `备注 ${note}` : ""
@@ -3284,7 +3341,7 @@ function overviewGroupBriefReasonText(row, itemNames) {
   const note = String(row.note || "").trim();
   const lines = [
     `${row.member}：${status}`,
-    `   定额：${fmt(row.quota)}｜实际完成数：${fmt(row.weighted)}｜差额：${signedTotalText(row.diff)}${row.dutyHours ? `｜尽本分时长：${fmtDutyHours(row.dutyHours)}` : ""}`,
+    `   成品定额：${fmt(row.quota)}｜成品量：${fmt(row.productTotal || 0)}｜差额：${signedTotalText(row.diff)}｜换算工作量：${fmt(row.weighted)}${row.dutyHours ? `｜尽本分时长：${fmtDutyHours(row.dutyHours)}` : ""}`,
     `   项目明细：${overviewGroupBriefItemDetail(row, itemNames)}`
   ];
   if (note) lines.push(`   备注：${note}`);
@@ -3296,9 +3353,10 @@ function buildOverviewGroupBriefTextForRange(group, range, label, report = repor
   const groupRows = membersForGroupValue(group, report).map((member) => aggregateMemberRange(member, days, report, itemNames));
   const totalWeighted = groupRows.reduce((sum, row) => sum + row.weighted, 0);
   const totalQuota = groupRows.reduce((sum, row) => sum + row.quota, 0);
-  const totalDiff = totalWeighted - totalQuota;
-  const totalVideoProduct = groupRows.reduce((sum, row) => sum + productTotalsForItems(row.items, itemNames, report).video, 0);
-  const totalAiProduct = groupRows.reduce((sum, row) => sum + productTotalsForItems(row.items, itemNames, report).ai, 0);
+  const totalVideoProduct = groupRows.reduce((sum, row) => sum + Number(row.video || 0), 0);
+  const totalAiProduct = groupRows.reduce((sum, row) => sum + Number(row.ai || 0), 0);
+  const totalProduct = productTotalValue({ video: totalVideoProduct, ai: totalAiProduct });
+  const totalDiff = totalProduct - totalQuota;
   const totalDutyHours = groupRows.reduce((sum, row) => sum + Number(row.dutyHours || 0), 0);
   const detailLines = sortedOverviewGroupRows(groupRows).length
     ? sortedOverviewGroupRows(groupRows).map((row) => overviewGroupBriefReasonText(row, itemNames))
@@ -3306,8 +3364,9 @@ function buildOverviewGroupBriefTextForRange(group, range, label, report = repor
   return [
     `${group} ${label}报数`,
     `时间：${rangeText(range)}`,
-    `定额：${fmt(totalQuota)}`,
-    `实际完成数：${fmt(totalWeighted)}`,
+    `成品定额：${fmt(totalQuota)}`,
+    `成品量：${fmt(totalProduct)}`,
+    `换算工作量：${fmt(totalWeighted)}`,
     `尽本分时长：${fmtDutyHours(totalDutyHours)}`,
     `视频成品：${fmt(totalVideoProduct)}`,
     `AI成品：${fmt(totalAiProduct)}`,
@@ -3332,20 +3391,22 @@ function overviewGroupBriefRows(group, report = reportData()) {
   const groupRows = membersForGroupValue(group, report).map((member) => aggregateMemberRange(member, days, report, itemNames));
   const totalWeighted = groupRows.reduce((sum, row) => sum + row.weighted, 0);
   const totalQuota = groupRows.reduce((sum, row) => sum + row.quota, 0);
-  const totalDiff = totalWeighted - totalQuota;
-  const totalVideoProduct = groupRows.reduce((sum, row) => sum + productTotalsForItems(row.items, itemNames, report).video, 0);
-  const totalAiProduct = groupRows.reduce((sum, row) => sum + productTotalsForItems(row.items, itemNames, report).ai, 0);
+  const totalVideoProduct = groupRows.reduce((sum, row) => sum + Number(row.video || 0), 0);
+  const totalAiProduct = groupRows.reduce((sum, row) => sum + Number(row.ai || 0), 0);
+  const totalProduct = productTotalValue({ video: totalVideoProduct, ai: totalAiProduct });
+  const totalDiff = totalProduct - totalQuota;
   const totalDutyHours = groupRows.reduce((sum, row) => sum + Number(row.dutyHours || 0), 0);
   const reasonLines = sortedOverviewGroupRows(groupRows).length
     ? sortedOverviewGroupRows(groupRows).map((row) => overviewGroupBriefLine(row, itemNames))
     : ["暂无成员数据。"];
   return [
-    [styledCell(`${group} ${range.label}报数｜${rangeText(range)}`, "sTitle", { mergeAcross: 8 })],
-    ["小组", "范围", "定额", "实际完成数", "尽本分时长", "视频成品", "AI成品", "差额", "成员达标与项目明细"].map((label) => styledCell(label, "sHeader")),
+    [styledCell(`${group} ${range.label}报数｜${rangeText(range)}`, "sTitle", { mergeAcross: 9 })],
+    ["小组", "范围", "成品定额", "成品量", "换算工作量", "尽本分时长", "视频成品", "AI成品", "差额", "成员达标与项目明细"].map((label) => styledCell(label, "sHeader")),
     [
       styledCell(group, "sDate"),
       styledCell(rangeText(range), "sItem"),
       styledCell(totalQuota, "sQuota"),
+      styledCell(totalProduct, "sTotal"),
       styledCell(totalWeighted, "sTotal"),
       styledCell(totalDutyHours, "sTotal"),
       styledCell(totalVideoProduct, "sTotal"),
@@ -3358,11 +3419,11 @@ function overviewGroupBriefRows(group, report = reportData()) {
 function buildOverviewBriefWorkbook(groups, report = reportData()) {
   const rows = groups.flatMap((group, index) => {
     const groupRows = overviewGroupBriefRows(group, report);
-    return index < groups.length - 1 ? [...groupRows, [styledCell("", "sSpacer", { mergeAcross: 8 })]] : groupRows;
+    return index < groups.length - 1 ? [...groupRows, [styledCell("", "sSpacer", { mergeAcross: 9 })]] : groupRows;
   });
   return {
-    rows: rows.length ? rows : [[styledCell("暂无可导出小组", "sTitle", { mergeAcross: 8 })]],
-    columns: [120, 150, 90, 110, 90, 90, 90, 90, 360]
+    rows: rows.length ? rows : [[styledCell("暂无可导出小组", "sTitle", { mergeAcross: 9 })]],
+    columns: [120, 150, 90, 90, 100, 90, 90, 90, 90, 360]
   };
 }
 function exportOverviewGroupBrief(group) {
@@ -3419,7 +3480,7 @@ function renderOverview() {
   renderOverviewGroupPicker(report);
   const range = overviewRangeInfo();
   const days = buildDateRange(range.start, range.end);
-  const quotaLabel = days.length === 1 ? "定额" : "周期定额";
+  const quotaLabel = days.length === 1 ? "成品定额" : "周期成品定额";
   if ($("overviewRangeSelect")) $("overviewRangeSelect").value = overviewRangeMode;
   if ($("overviewRangeHint")) $("overviewRangeHint").textContent = `${range.label}：${rangeText(range)} · ${days.length} 天`;
   if ($("overviewScopeHint")) $("overviewScopeHint").textContent = `当前查看：${selectedReportLabel()} · ${overviewGroupLabel(report)} · ${range.label}`;
@@ -3433,8 +3494,9 @@ function renderOverview() {
   const pass = rows.filter((row) => row.passed).length;
   const fail = rows.length - pass;
   const totalWeighted = rows.reduce((sum, row) => sum + row.weighted, 0);
+  const totalProduct = rows.reduce((sum, row) => sum + Number(row.productTotal || 0), 0);
   const totalQuota = rows.reduce((sum, row) => sum + row.quota, 0);
-  const teamPassed = totalWeighted >= totalQuota;
+  const teamPassed = totalProduct >= totalQuota;
   const itemTotals = itemNames.reduce((totals, name) => {
     totals[name] = rows.reduce((sum, row) => sum + Number(row.items[name] || 0), 0);
     return totals;
@@ -3444,10 +3506,10 @@ function renderOverview() {
   $("failCount").textContent = String(fail);
   $("passRate").textContent = rows.length ? `${Math.round(pass / rows.length * 100)}%` : "0%";
   if ($("passRateDetail")) $("passRateDetail").textContent = `${pass} / ${rows.length} 位成员达标`;
-  $("teamTotal").textContent = fmt(totalWeighted);
+  $("teamTotal").textContent = fmt(totalProduct);
   $("teamQuota").textContent = `${fmt(totalQuota)} ${teamPassed ? "✓" : ""}`;
-  $("teamDiff").textContent = `${totalWeighted - totalQuota >= 0 ? "+" : ""}${fmt(totalWeighted - totalQuota)}`;
-  $("overviewHint").textContent = `${rangeText(range)} · ${rows.length} 位成员 · ${teamPassed ? "已完成" : "未完成"}总定额`;
+  $("teamDiff").textContent = `${totalProduct - totalQuota >= 0 ? "+" : ""}${fmt(totalProduct - totalQuota)}`;
+  $("overviewHint").textContent = `${rangeText(range)} · ${rows.length} 位成员 · ${teamPassed ? "已完成" : "未完成"}成品定额 · 换算工作量 ${fmt(totalWeighted)}`;
   const rowCard = (row) => `
     <article class="person-card ${row.passed ? "pass" : "fail"}" data-overview-member="${escapeAttr(row.member)}" title="点击切换这个成员的明细和打卡">
       <div class="person-top">
@@ -3455,8 +3517,9 @@ function renderOverview() {
         <span class="status ${row.passed ? "pass" : "fail"}">${row.passed ? "达标" : "未达"}</span>
       </div>
       <div class="progress" title="${row.rate}%"><span style="--w:${row.rate}%"></span></div>
-      <div class="hint">工作量 ${fmt(row.weighted)} / ${quotaLabel} ${fmt(row.quota)}</div>
+      <div class="hint">成品量 ${fmt(row.productTotal || 0)} / ${quotaLabel} ${fmt(row.quota)}</div>
       <div class="hint">差额 ${row.diff >= 0 ? "+" : ""}${fmt(row.diff)}</div>
+      <div class="hint">换算工作量 ${fmt(row.weighted)}</div>
       <div class="hint">尽本分 ${fmtDutyHours(row.dutyHours || 0)}</div>
       <div class="hint">打卡 ${row.checkinCount}/${row.checkinSlots}</div>
       <div class="hint">${escapeHtml(row.note || "暂无备注")}</div>
@@ -3465,12 +3528,13 @@ function renderOverview() {
   $("overviewGrid").innerHTML = visibleGroups.map((group) => {
     const groupRows = rows.filter((row) => (report.memberGroups?.[row.member] || report.groups[0]) === group);
     const groupWeighted = groupRows.reduce((sum, row) => sum + row.weighted, 0);
+    const groupProduct = groupRows.reduce((sum, row) => sum + Number(row.productTotal || 0), 0);
     const groupQuota = groupRows.reduce((sum, row) => sum + row.quota, 0);
     return `
       <details class="overview-group" open>
         <summary>
           <span>${escapeHtml(group)} · ${groupRows.length} 人</span>
-          <strong>${fmt(groupWeighted)} / ${fmt(groupQuota)}</strong>
+          <strong>${fmt(groupProduct)} / ${fmt(groupQuota)}<small> · 换算 ${fmt(groupWeighted)}</small></strong>
           <span class="overview-export-actions">
             <button class="overview-export-btn" type="button" data-overview-export-group="${escapeAttr(group)}">表格</button>
             <button class="overview-export-btn" type="button" data-overview-export-text-group="${escapeAttr(group)}">TXT</button>
@@ -3518,6 +3582,9 @@ function renderOverview() {
   }, {});
   const detailRaw = detailSourceRows.reduce((sum, row) => sum + row.raw, 0);
   const detailWeighted = detailSourceRows.reduce((sum, row) => sum + row.weighted, 0);
+  const detailProduct = detailSourceRows.reduce((sum, row) => sum + Number(row.productTotal || 0), 0);
+  const detailVideo = detailSourceRows.reduce((sum, row) => sum + Number(row.video || 0), 0);
+  const detailAi = detailSourceRows.reduce((sum, row) => sum + Number(row.ai || 0), 0);
   const detailQuota = detailSourceRows.reduce((sum, row) => sum + row.quota, 0);
   const detailDutyHours = detailSourceRows.reduce((sum, row) => sum + Number(row.dutyHours || 0), 0);
   const detailLabel = overviewDetailMember || (overviewDetailGroup === "__all__" ? "全部成员合计" : `${overviewDetailGroup}全部成员`);
@@ -3525,9 +3592,12 @@ function renderOverview() {
   renderDetailSummaryGrid("detailSummaryGrid", detailTotals, {
     raw: detailRaw,
     weighted: detailWeighted,
+    productTotal: detailProduct,
+    video: detailVideo,
+    ai: detailAi,
     quota: detailQuota,
     dutyHours: detailDutyHours,
-    diff: detailWeighted - detailQuota,
+    diff: detailProduct - detailQuota,
     quotaLabel
   });
   renderMixedOverviewTable();
@@ -3573,17 +3643,18 @@ function signedText(value) {
 }
 function mixedMonthlyReportLabels(itemNames) {
   return {
-    actual: [...itemNames, "工作量", "视频成品", "AI成品", "定额", "差额"],
-    delta: [...itemNames, "工作量差", "视频差", "AI差"],
-    plan: [...itemNames, "计划工作量", "计划视频", "计划AI", "计划定额", "已完成", "进度", "计划差额"]
+    actual: [...itemNames, "成品量", "视频成品", "AI成品", "换算工作量", "成品定额", "差额"],
+    delta: [...itemNames, "成品量差", "视频差", "AI差", "换算差"],
+    plan: [...itemNames, "计划成品量", "计划视频", "计划AI", "计划换算", "计划成品定额", "已成品", "进度", "计划差额"]
   };
 }
 function mixedMonthlyActualCells(part, itemNames) {
   return [
     ...itemNames.map((name) => `<td>${fmtTotal(part.items?.[name] || 0)}</td>`),
-    `<td class="mixed-total">${fmtTotal(part.weighted || 0)}</td>`,
+    `<td class="mixed-total">${fmtTotal(part.productTotal || 0)}</td>`,
     `<td>${fmtTotal(part.video || 0)}</td>`,
     `<td>${fmtTotal(part.ai || 0)}</td>`,
+    `<td>${fmtTotal(part.weighted || 0)}</td>`,
     `<td>${fmtTotal(part.quota || 0)}</td>`,
     `<td class="${cleanTotalValue(part.diff || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${signedText(part.diff || 0)}</td>`
   ].join("");
@@ -3594,9 +3665,10 @@ function mixedMonthlyDeltaCells(delta, itemNames) {
       const value = cleanTotalValue(delta.items?.[name] || 0);
       return `<td class="${value >= 0 ? "mixed-good-soft" : "mixed-bad"}">${signedText(value)}</td>`;
     }),
-    `<td class="${cleanTotalValue(delta.weighted || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${signedText(delta.weighted || 0)}</td>`,
+    `<td class="${cleanTotalValue(delta.productTotal || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${signedText(delta.productTotal || 0)}</td>`,
     `<td class="${cleanTotalValue(delta.video || 0) >= 0 ? "mixed-good-soft" : "mixed-bad"}">${signedText(delta.video || 0)}</td>`,
-    `<td class="${cleanTotalValue(delta.ai || 0) >= 0 ? "mixed-good-soft" : "mixed-bad"}">${signedText(delta.ai || 0)}</td>`
+    `<td class="${cleanTotalValue(delta.ai || 0) >= 0 ? "mixed-good-soft" : "mixed-bad"}">${signedText(delta.ai || 0)}</td>`,
+    `<td class="${cleanTotalValue(delta.weighted || 0) >= 0 ? "mixed-good-soft" : "mixed-bad"}">${signedText(delta.weighted || 0)}</td>`
   ].join("");
 }
 function mixedMonthlyPlanCells(row, itemNames, info, editable, isTotal = false) {
@@ -3615,9 +3687,10 @@ function mixedMonthlyPlanCells(row, itemNames, info, editable, isTotal = false) 
     </td>`;
   return [
     ...itemCells,
-    `<td class="mixed-total">${fmtTotal(plan.weighted || 0)}</td>`,
+    `<td class="mixed-total">${fmtTotal(plan.productTotal || 0)}</td>`,
     `<td>${fmtTotal(plan.video || 0)}</td>`,
     `<td>${fmtTotal(plan.ai || 0)}</td>`,
+    `<td>${fmtTotal(plan.weighted || 0)}</td>`,
     quotaCell,
     `<td>${fmtTotal(plan.actual || 0)}</td>`,
     `<td class="${cleanTotalValue(plan.diff || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${fmt(plan.rate || 0)}%</td>`,
@@ -3709,29 +3782,29 @@ function updateMixedMonthlyPlanQuota(input) {
 function renderMixedOverviewTable() {
   if (!reportDataOverride) return withReportData(selectedReportData(), renderMixedOverviewTable);
   const report = reportData();
-  if (!$("mixedTableHead")) return;
-  mixedTableGroup = renderGroupOnlySelect("mixedTableGroup", mixedTableGroup, report);
-  if ($("mixedTableRangeMode")) $("mixedTableRangeMode").value = mixedTableRangeMode;
+  if (!$('mixedTableHead')) return;
+  mixedTableGroup = renderGroupOnlySelect('mixedTableGroup', mixedTableGroup, report);
+  if ($('mixedTableRangeMode')) $('mixedTableRangeMode').value = mixedTableRangeMode;
   applyMixedTableDefaultRange();
   renderMixedExportMonths(report);
-  let start = $("mixedTableStart").value || currentDate;
-  let end = $("mixedTableEnd").value || currentDate;
+  let start = $('mixedTableStart').value || currentDate;
+  let end = $('mixedTableEnd').value || currentDate;
   if (start > end) {
     [start, end] = [end, start];
-    $("mixedTableStart").value = start;
-    $("mixedTableEnd").value = end;
+    $('mixedTableStart').value = start;
+    $('mixedTableEnd').value = end;
   }
   const members = membersForGroupValue(mixedTableGroup, report);
-  const member = members.includes(mixedTableMember) ? mixedTableMember : members[0] || "";
+  const member = members.includes(mixedTableMember) ? mixedTableMember : members[0] || '';
   mixedTableMember = member;
-  if ($("mixedTableMember")) {
-    $("mixedTableMember").innerHTML = members.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join("");
-    if (member) $("mixedTableMember").value = member;
+  if ($('mixedTableMember')) {
+    $('mixedTableMember').innerHTML = members.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join('');
+    if (member) $('mixedTableMember').value = member;
   }
-  renderValueTabs("mixedMemberTabs", members.map((name) => ({ value: name, label: name })), member, "data-mixed-member-tab");
-  $("mixedMemberTabs")?.querySelectorAll("[data-mixed-member-tab]").forEach((button) => {
+  renderValueTabs('mixedMemberTabs', members.map((name) => ({ value: name, label: name })), member, 'data-mixed-member-tab');
+  $('mixedMemberTabs')?.querySelectorAll('[data-mixed-member-tab]').forEach((button) => {
     button.onclick = () => {
-      mixedTableMember = button.dataset.mixedMemberTab || "";
+      mixedTableMember = button.dataset.mixedMemberTab || '';
       renderMixedOverviewTable();
     };
   });
@@ -3739,25 +3812,27 @@ function renderMixedOverviewTable() {
   const itemNames = groupVisibleItems(mixedTableGroup, report);
   const editable = report === data && data.members.includes(member);
   const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
+  let totalProduct = 0;
   let totalWeighted = 0;
   let totalQuota = 0;
   let totalDutyHours = 0;
-  $("mixedTableHint").textContent = member
-    ? `${mixedTableGroup} · ${member} · ${start} 至 ${end} · ${itemNames.length} 个组项目 · ${editable ? "可直接编辑" : "当前范围只读"}`
-    : "请选择成员";
-  $("mixedTableHead").innerHTML = `
+  $('mixedTableHint').textContent = member
+    ? `${mixedTableGroup} · ${member} · ${start} 至 ${end} · ${itemNames.length} 个组项目 · 主看成品量 · ${editable ? '可直接编辑' : '当前范围只读'}`
+    : '请选择成员';
+  $('mixedTableHead').innerHTML = `
     <tr>
       <th>日期</th>
-      ${itemNames.map((name) => `<th>${escapeHtml(name)}</th>`).join("")}
-      <th>完成</th>
-      <th>定额</th>
+      ${itemNames.map((name) => `<th>${escapeHtml(name)}</th>`).join('')}
+      <th>成品量</th>
+      <th>成品定额</th>
+      <th>换算工作量</th>
       <th>尽本分时长</th>
       <th>差额</th>
       <th>备注</th>
     </tr>
   `;
   if (!member) {
-    $("mixedTableBody").innerHTML = `<tr><td colspan="${6 + itemNames.length}" class="hint">暂无可查看成员。</td></tr>`;
+    $('mixedTableBody').innerHTML = `<tr><td colspan="${7 + itemNames.length}" class="hint">暂无可查看成员。</td></tr>`;
     renderMixedMonthlyReport();
     renderMixedCheckinTable();
     return;
@@ -3766,50 +3841,55 @@ function renderMixedOverviewTable() {
     const rec = recordForReport(report, day, member);
     const items = rec?.items || {};
     const totals = totalsForItems(items, itemNames, report);
+    const products = productTotalsForItems(items, itemNames, report);
+    const productTotal = productTotalValue(products);
     const weighted = totals.weighted;
     const quota = memberQuota(member, day);
     const dutyHours = dutyHoursValue(rec);
+    totalProduct += productTotal;
     totalWeighted += weighted;
     totalQuota += quota;
     totalDutyHours += dutyHours;
     itemNames.forEach((name) => {
       itemTotals[name] += Number(items[name] || 0);
     });
-    const diff = weighted - quota;
+    const diff = productTotal - quota;
     return `
       <tr>
         <td class="mixed-date">${escapeHtml(day.slice(5))}</td>
         ${itemNames.map((name) => {
           const amount = Number(items[name] || 0);
-          return `<td class="${amount ? "mixed-number" : ""}">
-            <input data-mixed-item data-day="${escapeAttr(day)}" data-member="${escapeAttr(member)}" data-item="${escapeAttr(name)}" type="number" step="0.01" inputmode="decimal" value="${amount || ""}" placeholder="0" ${editable ? "" : "disabled"}>
+          return `<td class="${amount ? 'mixed-number' : ''}">
+            <input data-mixed-item data-day="${escapeAttr(day)}" data-member="${escapeAttr(member)}" data-item="${escapeAttr(name)}" type="number" step="0.01" inputmode="decimal" value="${amount || ''}" placeholder="0" ${editable ? '' : 'disabled'}>
           </td>`;
-        }).join("")}
-        <td class="mixed-total">${cleanTotalValue(weighted) ? fmtTotal(weighted) : ""}</td>
+        }).join('')}
+        <td class="mixed-total">${cleanTotalValue(productTotal) ? fmtTotal(productTotal) : ''}</td>
         <td>${fmtTotal(quota)}</td>
+        <td>${cleanTotalValue(weighted) ? fmtTotal(weighted) : ''}</td>
         <td class="mixed-number">
-          <input data-mixed-duty-hours data-day="${escapeAttr(day)}" data-member="${escapeAttr(member)}" type="number" step="0.01" min="0" inputmode="decimal" value="${dutyHours || ""}" placeholder="0" ${editable ? "" : "disabled"}>
+          <input data-mixed-duty-hours data-day="${escapeAttr(day)}" data-member="${escapeAttr(member)}" type="number" step="0.01" min="0" inputmode="decimal" value="${dutyHours || ''}" placeholder="0" ${editable ? '' : 'disabled'}>
         </td>
-        <td class="${cleanTotalValue(diff) >= 0 ? "mixed-good" : "mixed-bad"}">${signedTotalText(diff)}</td>
+        <td class="${cleanTotalValue(diff) >= 0 ? 'mixed-good' : 'mixed-bad'}">${signedTotalText(diff)}</td>
         <td class="mixed-note">
-          <textarea data-mixed-note data-day="${escapeAttr(day)}" data-member="${escapeAttr(member)}" rows="2" ${editable ? "" : "disabled"}>${escapeHtml(rec?.reason || rec?.harvest || rec?.diary || "")}</textarea>
+          <textarea data-mixed-note data-day="${escapeAttr(day)}" data-member="${escapeAttr(member)}" rows="2" ${editable ? '' : 'disabled'}>${escapeHtml(rec?.reason || rec?.harvest || rec?.diary || '')}</textarea>
         </td>
       </tr>
     `;
   });
-  const totalDiff = totalWeighted - totalQuota;
+  const totalDiff = totalProduct - totalQuota;
   rows.unshift(`
     <tr class="mixed-summary-row">
       <th>合计</th>
-      ${itemNames.map((name) => `<th>${fmtTotal(itemTotals[name])}</th>`).join("")}
-      <th>${fmtTotal(totalWeighted)}</th>
+      ${itemNames.map((name) => `<th>${fmtTotal(itemTotals[name])}</th>`).join('')}
+      <th>${fmtTotal(totalProduct)}</th>
       <th>${fmtTotal(totalQuota)}</th>
+      <th>${fmtTotal(totalWeighted)}</th>
       <th>${fmtDutyHours(totalDutyHours)}</th>
-      <th class="${cleanTotalValue(totalDiff) >= 0 ? "mixed-good" : "mixed-bad"}">${signedTotalText(totalDiff)}</th>
+      <th class="${cleanTotalValue(totalDiff) >= 0 ? 'mixed-good' : 'mixed-bad'}">${signedTotalText(totalDiff)}</th>
       <th></th>
     </tr>
   `);
-  $("mixedTableBody").innerHTML = rows.join("");
+  $('mixedTableBody').innerHTML = rows.join('');
   bindMixedTableEdits();
   renderMixedMonthlyReport();
   renderMixedCheckinTable();
@@ -4040,43 +4120,43 @@ function renderAnalytics() {
   const displayDays = compareMode === "thisWeek" ? periodKeys(currentDate, Math.min(7, dateFromKey(currentDate).getDay() || 7)) : days;
   const currentDisplay = aggregatePeriod(displayDays, scope, member);
   const previous = aggregatePeriod(compareDays, scope, member);
-  const weightedDelta = current.weighted - previous.weighted;
+  const productDelta = current.productTotal - previous.productTotal;
   const diffDelta = current.diff - previous.diff;
-  const rate = current.quota > 0 ? Math.round(current.weighted / current.quota * 100) : 100;
   const group = analysisGroupValue(report);
   const label = scope === "member" ? (member || `${group}全部成员`) : scope === "group" ? group : "团队";
   const yesterday = aggregatePeriod([addDays(currentDate, -1)], scope, member);
   const today = aggregatePeriod([currentDate], scope, member);
-  const todayDelta = today.weighted - yesterday.weighted;
+  const todayDelta = today.productTotal - yesterday.productTotal;
   const compareLabel = { previous: `当前 ${range} 天 vs 前 ${range} 天`, thisWeek: "本周累计", lastMonth: "对比上月同期" }[compareMode] || `当前 ${range} 天 vs 前 ${range} 天`;
   $("analysisHint").textContent = `${label} · ${compareMode === "thisWeek" ? "本周" : `${range} 天`} · ${compareLabel}`;
   $("analysisSummary").innerHTML = `
-    <div class="analysis-card"><span>完成量</span><strong>${fmt(current.weighted)}</strong></div>
-    <div class="analysis-card"><span>周期定额</span><strong>${fmt(current.quota)}</strong></div>
-    <div class="analysis-card ${current.diff >= 0 ? "good" : "bad"}"><span>周期差额</span><strong>${current.diff >= 0 ? "+" : ""}${fmt(current.diff)}</strong></div>
+    <div class="analysis-card"><span>成品量</span><strong>${fmt(current.productTotal || 0)}</strong></div>
+    <div class="analysis-card"><span>成品定额</span><strong>${fmt(current.quota)}</strong></div>
+    <div class="analysis-card ${current.diff >= 0 ? "good" : "bad"}"><span>成品差额</span><strong>${current.diff >= 0 ? "+" : ""}${fmt(current.diff)}</strong></div>
+    <div class="analysis-card"><span>换算工作量</span><strong>${fmt(current.weighted)}</strong></div>
     <div class="analysis-card ${todayDelta >= 0 ? "good" : "bad"}"><span>今日较昨日</span><strong>${todayDelta >= 0 ? `增长 ${fmt(todayDelta)}` : `下滑 ${fmt(Math.abs(todayDelta))}`}</strong></div>
   `;
   const itemDeltaRows = Object.entries(today.itemTotals).map(([name, value]) => {
     const previousValue = Number(yesterday.itemTotals[name] || 0);
     const delta = Number(value || 0) - previousValue;
-    return { label: `${name}：${delta >= 0 ? "增加" : "减少"} ${fmt(Math.abs(delta))}`, weighted: delta };
+    return { label: `${name}：${delta >= 0 ? "增加" : "减少"} ${fmt(Math.abs(delta))}`, weighted: delta, productTotal: delta };
   });
   $("compareSummary").innerHTML = `
-    <div class="analysis-card"><span>当前段</span><strong>${fmt(current.weighted)}</strong></div>
-    <div class="analysis-card"><span>对比段</span><strong>${fmt(previous.weighted)}</strong></div>
-    <div class="analysis-card ${weightedDelta >= 0 ? "good" : "bad"}"><span>完成量差</span><strong>${weightedDelta >= 0 ? "+" : ""}${fmt(weightedDelta)}</strong></div>
+    <div class="analysis-card"><span>当前成品</span><strong>${fmt(current.productTotal || 0)}</strong></div>
+    <div class="analysis-card"><span>对比成品</span><strong>${fmt(previous.productTotal || 0)}</strong></div>
+    <div class="analysis-card ${productDelta >= 0 ? "good" : "bad"}"><span>成品量差</span><strong>${productDelta >= 0 ? "+" : ""}${fmt(productDelta)}</strong></div>
     <div class="analysis-card ${diffDelta >= 0 ? "good" : "bad"}"><span>差额变化</span><strong>${diffDelta >= 0 ? "增长" : "下滑"} ${fmt(Math.abs(diffDelta))}</strong></div>
   `;
   renderMiniBars("compareChart", [
-    { label: `${days[0].slice(5)}-${days[days.length - 1].slice(5)}`, weighted: current.weighted },
-    { label: `${compareDays[0].slice(5)}-${compareDays[compareDays.length - 1].slice(5)}`, weighted: previous.weighted },
+    { label: `${days[0].slice(5)}-${days[days.length - 1].slice(5)}`, productTotal: current.productTotal },
+    { label: `${compareDays[0].slice(5)}-${compareDays[compareDays.length - 1].slice(5)}`, productTotal: previous.productTotal },
     ...itemDeltaRows
-  ], "weighted");
+  ], "productTotal");
   renderMiniBars("analysisChart", currentDisplay.daily.map((row) => ({
     label: row.day.slice(5),
-    weighted: row.weighted,
+    productTotal: row.productTotal,
     diff: row.diff
-  })), "weighted");
+  })), "productTotal");
   const itemRows = Object.entries(current.itemTotals).map(([name, value]) => ({ label: name, weighted: value }));
   renderMiniBars("analysisItemChart", itemRows, "weighted");
   renderLineChart("analysisLineChart", currentDisplay.daily);
@@ -4085,10 +4165,11 @@ function renderAnalytics() {
   renderPersonalTable(customDays, custom, scope, member);
 }
 function renderLineChart(containerId, rows) {
-  const max = Math.max(...rows.map((row) => row.weighted), 1);
+  const valueFor = (row) => Number(row.productTotal ?? row.weighted ?? 0);
+  const max = Math.max(...rows.map(valueFor), 1);
   const points = rows.map((row, index) => {
     const x = rows.length <= 1 ? 0 : index / (rows.length - 1) * 100;
-    const y = 100 - (row.weighted / max * 92);
+    const y = 100 - (valueFor(row) / max * 92);
     return `${x},${y}`;
   }).join(" ");
   $(containerId).innerHTML = `
@@ -4158,8 +4239,9 @@ function renderPersonalTable(days, aggregate, scope, member) {
       <th>日期</th>
       <th>成员</th>
       ${itemNames.map((name) => `<th>${escapeHtml(name)}</th>`).join("")}
-      <th>工作量</th>
-      <th>定额</th>
+      <th>成品量</th>
+      <th>成品定额</th>
+      <th>换算工作量</th>
       <th>尽本分时长</th>
       <th>差额</th>
     </tr>
@@ -4169,7 +4251,9 @@ function renderPersonalTable(days, aggregate, scope, member) {
     members.forEach((name) => {
       const rec = recordFor(day, name);
       const items = rec?.items || {};
-      const weighted = Number(rec?.weighted_total || 0);
+      const products = productTotalsForItems(items, itemNames, report);
+      const productTotal = productTotalValue(products);
+      const weighted = totalsForItems(items, itemNames, report).weighted;
       const quota = memberQuota(name, day);
       const dutyHours = dutyHoursValue(rec);
       rows.push(`
@@ -4177,10 +4261,11 @@ function renderPersonalTable(days, aggregate, scope, member) {
           <td>${escapeHtml(day)}</td>
           <td>${escapeHtml(name)}</td>
           ${itemNames.map((item) => `<td>${fmt(items[item] || 0)}</td>`).join("")}
-          <td>${fmt(weighted)}</td>
+          <td>${fmt(productTotal)}</td>
           <td>${fmt(quota)}</td>
+          <td>${fmt(weighted)}</td>
           <td>${fmtDutyHours(dutyHours)}</td>
-          <td>${weighted - quota >= 0 ? "+" : ""}${fmt(weighted - quota)}</td>
+          <td>${productTotal - quota >= 0 ? "+" : ""}${fmt(productTotal - quota)}</td>
         </tr>
       `);
     });
@@ -4190,8 +4275,9 @@ function renderPersonalTable(days, aggregate, scope, member) {
       <th>合计</th>
       <th>${scope === "member" ? escapeHtml(member || `${analysisGroupValue(report)}全部成员`) : escapeHtml(analysisTableMember || "团队")}</th>
       ${itemNames.map((name) => `<th>${fmt(tableAggregate.itemTotals[name] || 0)}</th>`).join("")}
-      <th>${fmt(tableAggregate.weighted)}</th>
+      <th>${fmt(tableAggregate.productTotal || 0)}</th>
       <th>${fmt(tableAggregate.quota)}</th>
+      <th>${fmt(tableAggregate.weighted)}</th>
       <th>${fmtDutyHours(tableAggregate.dutyHours || 0)}</th>
       <th>${tableAggregate.diff >= 0 ? "+" : ""}${fmt(tableAggregate.diff)}</th>
     </tr>
@@ -5053,30 +5139,33 @@ function buildThreeMonthWorkbookXml() {
   const itemNames = configuredItems();
   const visibleMembers = new Set(reportMembers(data));
   const records = recordsInLastMonths(3).filter((rec) => visibleMembers.has(rec.member));
-  const header = ["日期", "成员", "分组", ...itemNames, "原始", "工作量", "定额", "尽本分时长", "差额", "视频成品", "AI成品", "状态", "备注"];
+  const header = ["日期", "成员", "分组", ...itemNames, "原始", "成品量", "成品定额", "换算工作量", "尽本分时长", "差额", "视频成品", "AI成品", "状态", "备注"];
   const recordRow = (rec) => {
     const quota = memberQuota(rec.member, rec.date);
     const products = productTotalsForItems(rec.items || {}, itemNames, data);
+    const productTotal = productTotalValue(products);
+    const weighted = totalsForItems(rec.items || {}, itemNames, data).weighted;
     return [
       rec.date,
       rec.member,
       data.memberGroups?.[rec.member] || "",
       ...itemNames.map((name) => Number(rec.items?.[name] || 0)),
       Number(rec.raw_total || 0),
-      Number(rec.weighted_total || 0),
+      productTotal,
       quota,
+      weighted,
       dutyHoursValue(rec),
-      Number(rec.weighted_total || 0) - quota,
+      productTotal - quota,
       products.video,
       products.ai,
       rec.status || "",
       rec.reason || rec.harvest || rec.diary || ""
     ];
   };
-  const summaryRows = [["成员", "分组", "总工作量", "总定额", "总尽本分时长", "总差额", "视频成品", "AI成品", ...itemNames]];
+  const summaryRows = [["成员", "分组", "总成品量", "总成品定额", "总换算工作量", "总尽本分时长", "总差额", "视频成品", "AI成品", ...itemNames]];
   reportMembers(data).forEach((member) => {
     const own = records.filter((rec) => rec.member === member);
-    const weighted = own.reduce((sum, rec) => sum + Number(rec.weighted_total || 0), 0);
+    const weighted = own.reduce((sum, rec) => sum + totalsForItems(rec.items || {}, itemNames, data).weighted, 0);
     const quota = own.reduce((sum, rec) => sum + memberQuota(member, rec.date), 0);
     const dutyHours = own.reduce((sum, rec) => sum + dutyHoursValue(rec), 0);
     const products = own.reduce((sum, rec) => {
@@ -5085,13 +5174,15 @@ function buildThreeMonthWorkbookXml() {
       sum.ai += next.ai;
       return sum;
     }, { video: 0, ai: 0 });
+    const productTotal = productTotalValue(products);
     summaryRows.push([
       member,
       data.memberGroups?.[member] || "",
-      weighted,
+      productTotal,
       quota,
+      weighted,
       dutyHours,
-      weighted - quota,
+      productTotal - quota,
       products.video,
       products.ai,
       ...itemNames.map((name) => own.reduce((sum, rec) => sum + Number(rec.items?.[name] || 0), 0))
@@ -5401,10 +5492,10 @@ function buildMixedSummaryText() {
     const start = periods[periods.length - 1]?.start || currentDate;
     const end = periods[0]?.end || currentDate;
     const days = periods.flatMap((period) => period.days || []);
-    const group = $("mixedTableGroup")?.value || mixedTableGroup || report.groups?.[0] || "";
+    const group = $('mixedTableGroup')?.value || mixedTableGroup || report.groups?.[0] || '';
     const members = membersForGroupValue(group, report);
-    const member = members.includes(mixedTableMember) ? mixedTableMember : members[0] || "";
-    if (!member) return "";
+    const member = members.includes(mixedTableMember) ? mixedTableMember : members[0] || '';
+    if (!member) return '';
     const itemNames = groupVisibleItems(group, report);
     const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
     let totalWeighted = 0;
@@ -5426,23 +5517,25 @@ function buildMixedSummaryText() {
         itemTotals[name] += Number(items[name] || 0);
       });
     });
-    const diff = totalWeighted - totalQuota;
+    const totalProduct = productTotalValue({ video: totalVideoProduct, ai: totalAiProduct });
+    const diff = totalProduct - totalQuota;
     const detail = Object.entries(itemTotals)
       .filter(([, amount]) => cleanTotalValue(amount) !== 0)
       .map(([name, amount]) => `${name}：${fmtTotal(amount)}`)
-      .join("，") || "暂无项目明细";
+      .join('，') || '暂无项目明细';
     return [
       `${group} · ${member}`,
       `时间：${start} 至 ${end}`,
-      `实际完成数：${fmtTotal(totalWeighted)}`,
-      `定额：${fmtTotal(totalQuota)}`,
+      `成品量：${fmtTotal(totalProduct)}`,
+      `成品定额：${fmtTotal(totalQuota)}`,
+      `换算工作量：${fmtTotal(totalWeighted)}`,
       `尽本分时长：${fmtDutyHours(totalDutyHours)}`,
       `视频成品：${fmtTotal(totalVideoProduct)}`,
       `AI成品：${fmtTotal(totalAiProduct)}`,
       `差额：${signedTotalText(diff)}`,
-      `状态：${cleanTotalValue(diff) >= 0 ? "已达标" : "未达标"}`,
+      `状态：${cleanTotalValue(diff) >= 0 ? '已达标' : '未达标'}`,
       `项目明细：${detail}`
-    ].join("\n");
+    ].join('\n');
   });
 }
 function legacyCopyText(text) {
@@ -5500,9 +5593,10 @@ async function copyMixedSummaryText(event) {
 function mixedMonthlyActualStyledCells(part, itemNames) {
   return [
     ...itemNames.map((name) => styledTotalCell(part.items?.[name] || 0, "sItem")),
-    styledTotalCell(part.weighted || 0, "sTotal"),
+    styledTotalCell(part.productTotal || 0, "sTotal"),
     styledTotalCell(part.video || 0, "sItem"),
     styledTotalCell(part.ai || 0, "sItem"),
+    styledTotalCell(part.weighted || 0, "sTotal"),
     styledTotalCell(part.quota || 0, "sQuota"),
     styledTotalCell(part.diff || 0, cleanTotalValue(part.diff || 0) >= 0 ? "sDiffGood" : "sDiffBad")
   ];
@@ -5513,17 +5607,19 @@ function mixedMonthlyDeltaStyledCells(delta, itemNames) {
       const value = cleanTotalValue(delta.items?.[name] || 0);
       return styledCell(value, value >= 0 ? "sDiffGood" : "sDiffBad");
     }),
-    styledTotalCell(delta.weighted || 0, cleanTotalValue(delta.weighted || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
+    styledTotalCell(delta.productTotal || 0, cleanTotalValue(delta.productTotal || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
     styledTotalCell(delta.video || 0, cleanTotalValue(delta.video || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
-    styledTotalCell(delta.ai || 0, cleanTotalValue(delta.ai || 0) >= 0 ? "sDiffGood" : "sDiffBad")
+    styledTotalCell(delta.ai || 0, cleanTotalValue(delta.ai || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
+    styledTotalCell(delta.weighted || 0, cleanTotalValue(delta.weighted || 0) >= 0 ? "sDiffGood" : "sDiffBad")
   ];
 }
 function mixedMonthlyPlanStyledCells(plan, itemNames) {
   return [
     ...itemNames.map((name) => styledTotalCell(plan.items?.[name] || 0, "sItem")),
-    styledTotalCell(plan.weighted || 0, "sTotal"),
+    styledTotalCell(plan.productTotal || 0, "sTotal"),
     styledTotalCell(plan.video || 0, "sItem"),
     styledTotalCell(plan.ai || 0, "sItem"),
+    styledTotalCell(plan.weighted || 0, "sTotal"),
     styledTotalCell(plan.quota || 0, "sQuota"),
     styledTotalCell(plan.actual || 0, "sTotal"),
     styledCell(`${fmt(plan.rate || 0)}%`, cleanTotalValue(plan.diff || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
@@ -5531,9 +5627,9 @@ function mixedMonthlyPlanStyledCells(plan, itemNames) {
   ];
 }
 function mixedMonthlyReportColumns(itemCount) {
-  const actual = [...Array.from({ length: itemCount }, () => 60), 62, 64, 64, 62, 62];
-  const delta = [...Array.from({ length: itemCount }, () => 60), 66, 64, 64];
-  const plan = [...Array.from({ length: itemCount }, () => 60), 70, 64, 64, 70, 70, 58, 70];
+  const actual = [...Array.from({ length: itemCount }, () => 60), 68, 64, 64, 78, 72, 70];
+  const delta = [...Array.from({ length: itemCount }, () => 60), 76, 64, 64, 72];
+  const plan = [...Array.from({ length: itemCount }, () => 60), 82, 70, 70, 78, 82, 76, 58, 76];
   return [72, ...actual, ...actual, ...delta, ...plan];
 }
 function mixedMonthlyReportExportBlock(group, report) {
@@ -5624,7 +5720,7 @@ function mixedExportStatusStyle(status) {
   return "sItem";
 }
 function mixedExportBlock(member, index, group, days, itemNames, periods, report) {
-  const header = [`${index + 1} ${member}`, ...periods.map((period) => `${period.label}打卡`), ...itemNames, "原始", "工作量", "定额", "尽本分时长", "差额", "视频成品", "AI成品", "状态", "备注"];
+  const header = [`${index + 1} ${member}`, ...periods.map((period) => `${period.label}打卡`), ...itemNames, "原始", "成品量", "成品定额", "换算工作量", "尽本分时长", "差额", "视频成品", "AI成品", "状态", "备注"];
   const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
   const records = days.map((day) => {
     const rec = recordForReport(report, day, member);
@@ -5634,19 +5730,21 @@ function mixedExportBlock(member, index, group, days, itemNames, periods, report
     });
     const totals = totalsForItems(items, itemNames, report);
     const products = productTotalsForItems(items, itemNames, report);
+    const productTotal = productTotalValue(products);
     const quota = memberQuota(member, day);
     const dutyHours = dutyHoursValue(rec);
-    return { day, rec, items, raw: totals.raw, weighted: totals.weighted, quota, dutyHours, diff: totals.weighted - quota, video: products.video, ai: products.ai };
+    return { day, rec, items, raw: totals.raw, weighted: totals.weighted, productTotal, quota, dutyHours, diff: productTotal - quota, video: products.video, ai: products.ai };
   });
   const totalRaw = records.reduce((sum, row) => sum + row.raw, 0);
+  const totalProduct = records.reduce((sum, row) => sum + row.productTotal, 0);
   const totalWeighted = records.reduce((sum, row) => sum + row.weighted, 0);
   const totalQuota = records.reduce((sum, row) => sum + row.quota, 0);
   const totalDutyHours = records.reduce((sum, row) => sum + Number(row.dutyHours || 0), 0);
-  const totalDiff = totalWeighted - totalQuota;
+  const totalDiff = totalProduct - totalQuota;
   const totalVideo = records.reduce((sum, row) => sum + row.video, 0);
   const totalAi = records.reduce((sum, row) => sum + row.ai, 0);
   const blockWidth = header.length;
-  const title = `${index + 1} ${member}｜${group || "未分组"}｜工作量 ${fmtTotal(totalWeighted)}｜视频成品 ${fmtTotal(totalVideo)}｜AI成品 ${fmtTotal(totalAi)}｜定额 ${fmtTotal(totalQuota)}｜差额 ${fmtTotal(totalDiff)}`;
+  const title = `${index + 1} ${member}｜${group || "未分组"}｜成品量 ${fmtTotal(totalProduct)}｜成品定额 ${fmtTotal(totalQuota)}｜差额 ${fmtTotal(totalDiff)}｜换算工作量 ${fmtTotal(totalWeighted)}`;
   const rows = [
     [styledCell(title, "sTitle", { mergeAcross: blockWidth - 1 })],
     header.map((label) => styledCell(label, "sHeader")),
@@ -5655,8 +5753,9 @@ function mixedExportBlock(member, index, group, days, itemNames, periods, report
       ...periods.map(() => styledCell("", "sCheckinBlank")),
       ...itemNames.map((name) => styledTotalCell(itemTotals[name] || 0, "sItem")),
       styledTotalCell(totalRaw, "sTotal"),
-      styledTotalCell(totalWeighted, "sTotal"),
+      styledTotalCell(totalProduct, "sTotal"),
       styledTotalCell(totalQuota, "sQuota"),
+      styledTotalCell(totalWeighted, "sTotal"),
       styledTotalCell(totalDutyHours, "sTotal"),
       styledTotalCell(totalDiff, cleanTotalValue(totalDiff) >= 0 ? "sDiffGood" : "sDiffBad"),
       styledTotalCell(totalVideo, "sTotal"),
@@ -5664,13 +5763,14 @@ function mixedExportBlock(member, index, group, days, itemNames, periods, report
       styledCell("", "sItem"),
       styledCell("", "sNote")
     ],
-    ...records.map(({ day, rec, items, raw, weighted, quota, dutyHours, diff, video, ai }) => [
+    ...records.map(({ day, rec, items, raw, productTotal, quota, weighted, dutyHours, diff, video, ai }) => [
       styledCell(day.slice(5), "sDate"),
       ...periods.map((period) => styledCell(checkinDisplay(rec?.checkins?.[period.key]), mixedExportCheckinStyle(rec?.checkins?.[period.key]))),
       ...itemNames.map((name) => styledCell(Number(items[name] || 0) || "", "sItem")),
       styledTotalCell(raw, "sTotal"),
-      styledTotalCell(weighted, "sTotal"),
+      styledTotalCell(productTotal, "sTotal"),
       styledTotalCell(quota, "sQuota"),
+      styledTotalCell(weighted, "sTotal"),
       styledTotalCell(dutyHours, "sTotal"),
       styledTotalCell(diff, cleanTotalValue(diff) >= 0 ? "sDiffGood" : "sDiffBad"),
       styledTotalCell(video, "sTotal"),
@@ -5697,52 +5797,54 @@ function mixedExportGroupBlock(days, members, itemNames, report) {
       ai += products.ai;
       quota += memberQuota(member, day);
     });
-    return { day, weighted, quota, diff: weighted - quota, video, ai };
+    const productTotal = productTotalValue({ video, ai });
+    return { day, weighted, productTotal, quota, diff: productTotal - quota, video, ai };
   });
   const totalWeighted = records.reduce((sum, row) => sum + row.weighted, 0);
+  const totalProduct = records.reduce((sum, row) => sum + row.productTotal, 0);
   const totalQuota = records.reduce((sum, row) => sum + row.quota, 0);
-  const totalDutyHours = records.reduce((sum, row) => sum + Number(row.dutyHours || 0), 0);
-  const totalDiff = totalWeighted - totalQuota;
+  const totalDiff = totalProduct - totalQuota;
   const totalVideo = records.reduce((sum, row) => sum + row.video, 0);
   const totalAi = records.reduce((sum, row) => sum + row.ai, 0);
   const rows = [
-    [styledCell("全组合计", "sTitle", { mergeAcross: 5 })],
-    ["日期", "全组完成", "全组定额", "全组差额", "视频成品", "AI成品"].map((label) => styledCell(label, "sHeader")),
+    [styledCell("全组合计", "sTitle", { mergeAcross: 6 })],
+    ["日期", "全组成品量", "全组成品定额", "全组换算工作量", "全组差额", "视频成品", "AI成品"].map((label) => styledCell(label, "sHeader")),
     [
       styledCell("合计", "sDate"),
-      styledTotalCell(totalWeighted, "sTotal"),
+      styledTotalCell(totalProduct, "sTotal"),
       styledTotalCell(totalQuota, "sQuota"),
-      styledTotalCell(totalDutyHours, "sTotal"),
+      styledTotalCell(totalWeighted, "sTotal"),
       styledTotalCell(totalDiff, cleanTotalValue(totalDiff) >= 0 ? "sDiffGood" : "sDiffBad"),
       styledTotalCell(totalVideo, "sTotal"),
       styledTotalCell(totalAi, "sTotal")
     ],
     ...records.map((row) => [
       styledCell(row.day.slice(5), "sDate"),
-      styledTotalCell(row.weighted, "sTotal"),
+      styledTotalCell(row.productTotal, "sTotal"),
       styledTotalCell(row.quota, "sQuota"),
+      styledTotalCell(row.weighted, "sTotal"),
       styledTotalCell(row.diff, cleanTotalValue(row.diff) >= 0 ? "sDiffGood" : "sDiffBad"),
       styledTotalCell(row.video, "sTotal"),
       styledTotalCell(row.ai, "sTotal")
     ])
   ];
-  return { rows, blockWidth: 6, totalWeighted, totalQuota, totalDiff, totalVideo, totalAi };
+  return { rows, blockWidth: 7, totalWeighted, totalProduct, totalQuota, totalDiff, totalVideo, totalAi };
 }
 function mixedExportItemColumnWidths(itemNames) {
   return itemNames.map((name) => Math.min(112, Math.max(60, String(name || "").length * 11)));
 }
 function mixedExportMemberBlockWidth(itemNames, periods = checkinPeriods()) {
-  return 1 + periods.length + itemNames.length + 8;
+  return 1 + periods.length + itemNames.length + 9;
 }
 function mixedExportColumnWidths(blockWidth, itemCount, memberCount) {
-  const block = [46, ...checkinPeriods().map(() => 48), ...Array.from({ length: itemCount }, () => 68), 74, 66, 66, 74, 74, 74, 58, 112];
+  const block = [46, ...checkinPeriods().map(() => 48), ...Array.from({ length: itemCount }, () => 68), 74, 70, 82, 74, 74, 74, 74, 58, 112];
   return Array.from({ length: memberCount }, (_, index) => [
     ...block.slice(0, blockWidth),
     ...(index < memberCount - 1 ? [12] : [])
   ]).flat();
 }
 function mixedExportColumns(blockWidth, itemCount, memberCount) {
-  return [48, 70, 70, 70, 12, ...mixedExportColumnWidths(blockWidth, itemCount, memberCount)];
+  return [48, 70, 70, 80, 70, 12, ...mixedExportColumnWidths(blockWidth, itemCount, memberCount)];
 }
 function mixedXlsxRow(cells, height, extra = {}) {
   return { cells, ...(height ? { height } : {}), ...extra };
@@ -5750,13 +5852,14 @@ function mixedXlsxRow(cells, height, extra = {}) {
 function mixedExportRecordNote(rec) {
   return rec?.reason || rec?.harvest || rec?.diary || "";
 }
-function mixedExportDailyReportText(weighted, quota, diff, note, dutyHours = 0) {
+function mixedExportDailyReportText(productTotal, quota, diff, note, dutyHours = 0, weighted = 0) {
   const cleanedDiff = cleanTotalValue(diff);
   const title = cleanedDiff >= 0 ? "超额/达标" : "未达标";
   const lines = [
     `${title}`,
-    `定额：${fmtTotal(quota)}`,
-    `实际完成数：${fmtTotal(weighted)}`,
+    `成品定额：${fmtTotal(quota)}`,
+    `成品量：${fmtTotal(productTotal)}`,
+    `换算工作量：${fmtTotal(weighted)}`,
     `尽本分时长：${fmtDutyHours(dutyHours)}`,
     `差额：${signedTotalText(cleanedDiff)}`
   ];
@@ -5768,6 +5871,7 @@ function mixedExportGroupTotals(days, members, itemNames, report) {
     items: Object.fromEntries(itemNames.map((name) => [name, 0])),
     raw: 0,
     weighted: 0,
+    productTotal: 0,
     quota: 0,
     diff: 0,
     video: 0,
@@ -5791,7 +5895,8 @@ function mixedExportGroupTotals(days, members, itemNames, report) {
       result.dutyHours += dutyHoursValue(rec);
     });
   });
-  result.diff = result.weighted - result.quota;
+  result.productTotal = productTotalValue({ video: result.video, ai: result.ai });
+  result.diff = result.productTotal - result.quota;
   return result;
 }
 function mixedExportGroupDayTotals(day, members, itemNames, report) {
@@ -5802,10 +5907,11 @@ function mixedExportMemberDay(member, day, itemNames, report) {
   const items = rec?.items || {};
   const totals = totalsForItems(items, itemNames, report);
   const products = productTotalsForItems(items, itemNames, report);
+  const productTotal = productTotalValue(products);
   const quota = memberQuota(member, day);
   const dutyHours = dutyHoursValue(rec);
-  const diff = totals.weighted - quota;
-  return { rec, items, raw: totals.raw, weighted: totals.weighted, quota, dutyHours, diff, video: products.video, ai: products.ai, note: mixedExportRecordNote(rec) };
+  const diff = productTotal - quota;
+  return { rec, items, raw: totals.raw, weighted: totals.weighted, productTotal, quota, dutyHours, diff, video: products.video, ai: products.ai, note: mixedExportRecordNote(rec) };
 }
 function mixedExportMemberTotalCells(member, days, itemNames, periods, report) {
   const total = aggregateMemberRange(member, days, report, itemNames);
@@ -5813,8 +5919,9 @@ function mixedExportMemberTotalCells(member, days, itemNames, periods, report) {
     styledCell("合计", "sDate"),
     ...periods.map(() => styledCell("", "sCheckinBlank")),
     ...itemNames.map((name) => styledTotalCell(total.items?.[name] || 0, "sItem")),
-    styledTotalCell(total.weighted, "sTotal"),
+    styledTotalCell(total.productTotal || 0, "sTotal"),
     styledTotalCell(total.quota, "sQuota"),
+    styledTotalCell(total.weighted, "sTotal"),
     styledTotalCell(total.dutyHours || 0, "sTotal"),
     styledTotalCell(total.diff, cleanTotalValue(total.diff) >= 0 ? "sDiffGood" : "sDiffBad"),
     styledTotalCell(total.video, "sTotal"),
@@ -5825,13 +5932,14 @@ function mixedExportMemberTotalCells(member, days, itemNames, periods, report) {
 }
 function mixedExportMemberDayCells(member, day, itemNames, periods, report) {
   const row = mixedExportMemberDay(member, day, itemNames, report);
-  const status = row.rec?.status || (row.weighted ? (cleanTotalValue(row.diff) >= 0 ? "达标" : "未达标") : "");
+  const status = row.rec?.status || (row.productTotal ? (cleanTotalValue(row.diff) >= 0 ? "达标" : "未达标") : "");
   return [
     styledCell(day.slice(5), "sDate"),
     ...periods.map((period) => styledCell(checkinDisplay(row.rec?.checkins?.[period.key]), mixedExportCheckinStyle(row.rec?.checkins?.[period.key]))),
     ...itemNames.map((name) => styledCell(Number(row.items[name] || 0) || "", "sItem")),
-    styledTotalCell(row.weighted, "sTotal"),
+    styledTotalCell(row.productTotal, "sTotal"),
     styledTotalCell(row.quota, "sQuota"),
+    styledTotalCell(row.weighted, "sTotal"),
     styledTotalCell(row.dutyHours, "sTotal"),
     styledTotalCell(row.diff, cleanTotalValue(row.diff) >= 0 ? "sDiffGood" : "sDiffBad"),
     styledTotalCell(row.video, "sTotal"),
@@ -5841,12 +5949,12 @@ function mixedExportMemberDayCells(member, day, itemNames, periods, report) {
   ];
 }
 function mixedHorizontalDetailSheet(exportPeriods, group, members, itemNames, periods, report) {
-  const summaryWidth = 4;
+  const summaryWidth = 5;
   const spacerWidth = 1;
   const blockWidth = mixedExportMemberBlockWidth(itemNames, periods);
-  const columns = [48, 70, 70, 70, 12];
+  const columns = [48, 70, 70, 80, 70, 12];
   const itemWidths = mixedExportItemColumnWidths(itemNames);
-  const memberColumns = [48, ...periods.map(() => 48), ...itemWidths, 74, 66, 66, 74, 74, 74, 58, 112];
+  const memberColumns = [48, ...periods.map(() => 48), ...itemWidths, 74, 70, 82, 74, 74, 74, 74, 58, 112];
   members.forEach((_, index) => {
     columns.push(...memberColumns);
     if (index < members.length - 1) columns.push(12);
@@ -5865,17 +5973,17 @@ function mixedHorizontalDetailSheet(exportPeriods, group, members, itemNames, pe
       ...members.flatMap((member, index) => {
         const total = memberTotals[index] || {};
         return [
-          styledCell(`名字：${member}｜工作量 ${fmtTotal(total.weighted || 0)}｜定额 ${fmtTotal(total.quota || 0)}｜差额 ${signedTotalText(total.diff || 0)}`, "sTitle", { mergeAcross: blockWidth - 1 }),
+          styledCell(`名字：${member}｜成品量 ${fmtTotal(total.productTotal || 0)}｜成品定额 ${fmtTotal(total.quota || 0)}｜差额 ${signedTotalText(total.diff || 0)}｜换算 ${fmtTotal(total.weighted || 0)}`, "sTitle", { mergeAcross: blockWidth - 1 }),
           ...(index < members.length - 1 ? [styledCell("", "sSpacer")] : [])
         ];
       })
     ];
     rows.push(mixedXlsxRow(titleCells, 35.25, collapsed ? { collapsed: true } : {}));
     const headerCells = [
-      ...["日期", "全组定额", "全组完成", "全组差额"].map((label) => styledCell(label, "sHeader")),
+      ...["日期", "全组成品定额", "全组成品量", "全组换算工作量", "全组差额"].map((label) => styledCell(label, "sHeader")),
       styledCell("", "sSpacer"),
       ...members.flatMap((_, index) => [
-        ...["日期", ...periods.map((item) => `${item.label}打卡`), ...itemNames, "工作量", "定额", "尽本分时长", "差额", "视频成品", "AI成品", "状态", "备注"].map((label) => styledCell(label, "sHeader")),
+        ...["日期", ...periods.map((item) => `${item.label}打卡`), ...itemNames, "成品量", "成品定额", "换算工作量", "尽本分时长", "差额", "视频成品", "AI成品", "状态", "备注"].map((label) => styledCell(label, "sHeader")),
         ...(index < members.length - 1 ? [styledCell("", "sSpacer")] : [])
       ])
     ];
@@ -5883,6 +5991,7 @@ function mixedHorizontalDetailSheet(exportPeriods, group, members, itemNames, pe
     const totalCells = [
       styledCell("合计", "sDate"),
       styledTotalCell(groupTotal.quota, "sQuota"),
+      styledTotalCell(groupTotal.productTotal, "sTotal"),
       styledTotalCell(groupTotal.weighted, "sTotal"),
       styledTotalCell(groupTotal.diff, cleanTotalValue(groupTotal.diff) >= 0 ? "sDiffGood" : "sDiffBad"),
       styledCell("", "sSpacer"),
@@ -5897,6 +6006,7 @@ function mixedHorizontalDetailSheet(exportPeriods, group, members, itemNames, pe
       const dayCells = [
         styledCell(day.slice(5), "sDate"),
         styledTotalCell(groupDay.quota, "sQuota"),
+        styledTotalCell(groupDay.productTotal, "sTotal"),
         styledTotalCell(groupDay.weighted, "sTotal"),
         styledTotalCell(groupDay.diff, cleanTotalValue(groupDay.diff) >= 0 ? "sDiffGood" : "sDiffBad"),
         styledCell("", "sSpacer"),
@@ -5925,8 +6035,8 @@ function mixedHorizontalDetailSheet(exportPeriods, group, members, itemNames, pe
   return { name: "混合明细", rows, columns, validations };
 }
 function mixedTotalsExportSheet(exportPeriods, group, members, itemNames, report) {
-  const header = ["范围", "成员", "工作量", "定额", "尽本分时长", "差额", "视频成品", "AI成品", ...itemNames];
-  const columns = [128, 86, 74, 74, 82, 74, 74, 74, ...mixedExportItemColumnWidths(itemNames)];
+  const header = ["范围", "成员", "成品量", "成品定额", "换算工作量", "尽本分时长", "差额", "视频成品", "AI成品", ...itemNames];
+  const columns = [128, 86, 74, 74, 82, 82, 74, 74, 74, ...mixedExportItemColumnWidths(itemNames)];
   const rows = [
     mixedXlsxRow([styledCell(`总数｜${group || "未分组"}`, "sTitle", { mergeAcross: header.length - 1 })], 32),
     mixedXlsxRow(header.map((label) => styledCell(label, "sHeader")), 30)
@@ -5936,8 +6046,9 @@ function mixedTotalsExportSheet(exportPeriods, group, members, itemNames, report
     rows.push(mixedXlsxRow([
       styledCell(`${period.label}\n${period.start} 至 ${period.end}`, "sDate"),
       styledCell("全组", "sDate"),
-      styledTotalCell(groupTotal.weighted, "sTotal"),
+      styledTotalCell(groupTotal.productTotal, "sTotal"),
       styledTotalCell(groupTotal.quota, "sQuota"),
+      styledTotalCell(groupTotal.weighted, "sTotal"),
       styledTotalCell(groupTotal.dutyHours || 0, "sTotal"),
       styledTotalCell(groupTotal.diff, cleanTotalValue(groupTotal.diff) >= 0 ? "sDiffGood" : "sDiffBad"),
       styledTotalCell(groupTotal.video, "sTotal"),
@@ -5949,8 +6060,9 @@ function mixedTotalsExportSheet(exportPeriods, group, members, itemNames, report
       rows.push(mixedXlsxRow([
         styledCell(period.label, "sItem"),
         styledCell(member, "sItem"),
-        styledTotalCell(total.weighted, "sTotal"),
+        styledTotalCell(total.productTotal || 0, "sTotal"),
         styledTotalCell(total.quota, "sQuota"),
+        styledTotalCell(total.weighted, "sTotal"),
         styledTotalCell(total.dutyHours || 0, "sTotal"),
         styledTotalCell(total.diff, cleanTotalValue(total.diff) >= 0 ? "sDiffGood" : "sDiffBad"),
         styledTotalCell(total.video, "sTotal"),
@@ -6006,7 +6118,7 @@ function exportMixedTableWorkbook() {
 }
 function buildCsvBackups() {
   const itemNames = configuredItems();
-  const rows = [["日期", "成员", ...itemNames, "原始", "工作量", "定额", "尽本分时长", "差额", "视频成品", "AI成品", "状态", "备注"]];
+  const rows = [["日期", "成员", ...itemNames, "原始", "成品量", "成品定额", "换算工作量", "尽本分时长", "差额", "视频成品", "AI成品", "状态", "备注"]];
   const visibleMembers = new Set(reportMembers(data));
   Object.values(data.records)
     .filter((rec) => visibleMembers.has(rec.member))
@@ -6014,25 +6126,28 @@ function buildCsvBackups() {
     .forEach((rec) => {
       const quota = memberQuota(rec.member, rec.date);
       const products = productTotalsForItems(rec.items || {}, itemNames, data);
+      const productTotal = productTotalValue(products);
+      const weighted = totalsForItems(rec.items || {}, itemNames, data).weighted;
       rows.push([
         rec.date,
         rec.member,
         ...itemNames.map((name) => rec.items?.[name] || 0),
         rec.raw_total || 0,
-        rec.weighted_total || 0,
+        productTotal,
         quota,
+        weighted,
         dutyHoursValue(rec),
-        Number(rec.weighted_total || 0) - quota,
+        productTotal - quota,
         products.video,
         products.ai,
         rec.status || "",
         rec.reason || rec.harvest || rec.diary || ""
       ]);
     });
-  const summary = [["成员", "总工作量", "总定额", "总尽本分时长", "总差额", "视频成品", "AI成品", ...itemNames]];
+  const summary = [["成员", "总成品量", "总成品定额", "总换算工作量", "总尽本分时长", "总差额", "视频成品", "AI成品", ...itemNames]];
   reportMembers(data).forEach((member) => {
     const records = Object.values(data.records).filter((rec) => rec.member === member);
-    const weighted = records.reduce((sum, rec) => sum + Number(rec.weighted_total || 0), 0);
+    const weighted = records.reduce((sum, rec) => sum + totalsForItems(rec.items || {}, itemNames, data).weighted, 0);
     const quota = records.reduce((sum, rec) => sum + memberQuota(member, rec.date), 0);
     const dutyHours = records.reduce((sum, rec) => sum + dutyHoursValue(rec), 0);
     const products = records.reduce((sum, rec) => {
@@ -6041,12 +6156,14 @@ function buildCsvBackups() {
       sum.ai += next.ai;
       return sum;
     }, { video: 0, ai: 0 });
+    const productTotal = productTotalValue(products);
     summary.push([
       member,
-      weighted,
+      productTotal,
       quota,
+      weighted,
       dutyHours,
-      weighted - quota,
+      productTotal - quota,
       products.video,
       products.ai,
       ...itemNames.map((name) => records.reduce((sum, rec) => sum + Number(rec.items?.[name] || 0), 0))
@@ -6273,9 +6390,9 @@ function importIsMetadataHeader(label) {
   if (!key) return true;
   if (/打卡$/.test(key)) return true;
   return new Set([
-    "日期", "成员", "姓名", "分组", "原始", "换算", "完成", "完成数", "完成总数", "总完成", "工作量",
-    "定额", "默认定额", "当日定额", "尽本分时长", "本分时长", "差额", "视频成品", "AI成品", "状态", "备注",
-    "全组完成", "全组定额", "全组差额"
+    "日期", "成员", "姓名", "分组", "原始", "换算", "完成", "完成数", "完成总数", "总完成", "工作量", "换算工作量",
+    "成品量", "定额", "成品定额", "默认定额", "默认成品定额", "当日定额", "当天成品定额", "尽本分时长", "本分时长", "差额", "视频成品", "AI成品", "状态", "备注",
+    "全组完成", "全组成品量", "全组定额", "全组成品定额", "全组换算工作量", "全组差额"
   ]).has(key);
 }
 function importKnownRuleName(target, itemName) {
@@ -6488,8 +6605,8 @@ function importRowsFromRecordTable(target, stats, rows, range = null) {
         group: source[map["分组"]],
         items,
         raw_total: source[map["原始"]],
-        weighted_total: source[map["工作量"] ?? map["完成"] ?? map["完成总数"]],
-        quota_total: source[map["定额"]],
+        weighted_total: source[map["换算工作量"] ?? map["工作量"] ?? map["完成"] ?? map["完成总数"]],
+        quota_total: source[map["成品定额"] ?? map["定额"]],
         duty_hours: source[map["尽本分时长"] ?? map["本分时长"]],
         status: source[map["状态"]],
         note: source[map["备注"]],
@@ -6515,7 +6632,7 @@ function importMixedDetailRows(target, stats, rows) {
       const title = importCellText(cell);
       if (!/^\d+\s+.+/.test(title)) return;
       const segment = row.slice(startIndex, startIndex + 60).map(importCellText);
-      const workOffset = segment.findIndex((label) => importHeaderKey(label) === "工作量");
+      const workOffset = segment.findIndex((label) => ["换算工作量", "工作量"].includes(importHeaderKey(label)));
       const rawOffset = segment.findIndex((label) => importHeaderKey(label) === "原始");
       if (workOffset < 0 && rawOffset < 0) return;
       const member = title.replace(/^\d+\s+/, "").trim();
@@ -6543,8 +6660,8 @@ function importMixedDetailRows(target, stats, rows) {
           member,
           items,
           raw_total: valueAt(nextRow, "原始"),
-          weighted_total: valueAt(nextRow, "工作量"),
-          quota_total: valueAt(nextRow, "定额"),
+          weighted_total: valueAt(nextRow, "换算工作量") || valueAt(nextRow, "工作量"),
+          quota_total: valueAt(nextRow, "成品定额") || valueAt(nextRow, "定额"),
           duty_hours: valueAt(nextRow, "尽本分时长") || valueAt(nextRow, "本分时长"),
           status: valueAt(nextRow, "状态"),
           note: valueAt(nextRow, "备注"),
@@ -6589,7 +6706,7 @@ function importLegacyMemberBlockStarts(nameRow = [], headerRow = []) {
     if (!member) return;
     const headerKeys = Array.from({ length: 45 }, (_, offset) => importHeaderKey(headerRow[index + offset]));
     const hasCheckin = headerKeys.some((key) => importLegacyHeaderSlot(key));
-    const hasMetric = headerKeys.some((key) => ["完成总数", "总完成", "工作量", "定额", "差额"].includes(key));
+    const hasMetric = headerKeys.some((key) => ["完成总数", "总完成", "成品量", "换算工作量", "工作量", "成品定额", "定额", "差额"].includes(key));
     const hasItems = headerKeys.some((key) => key && !importLegacyIsMetadataHeader(key));
     if (hasCheckin && (hasMetric || hasItems)) starts.push({ member, index });
   });
@@ -6646,8 +6763,8 @@ function importLegacyHorizontalRows(target, stats, rows, sheetName = "") {
           member,
           group,
           items,
-          weighted_total: valueAt(source, ["工作量", "完成总数", "总完成"]),
-          quota_total: valueAt(source, ["定额", "当日定额", "默认定额"]),
+          weighted_total: valueAt(source, ["换算工作量", "工作量", "完成总数", "总完成"]),
+          quota_total: valueAt(source, ["成品定额", "定额", "当天成品定额", "当日定额", "默认成品定额", "默认定额"]),
           duty_hours: valueAt(source, ["尽本分时长", "本分时长"]),
           status: valueAt(source, ["状态"]),
           note: valueAt(source, ["备注", "没完成的原因", "未完成原因", "没完成原因", "原因"]),
@@ -6912,7 +7029,7 @@ async function saveAdminConfig() {
     return;
   }
   $("adminSaveStatus").textContent = `配置已保存并同步 · ${new Date().toLocaleString("zh-CN")}`;
-  showDialog("配置已保存", result.cloudDbWritten ? `项目、定额和成员名单已经写入${cloudSyncProviderLabel()}。其他成员同步后会自动更新。` : "项目、定额和成员名单已经写入共享数据。其他成员同步后会自动更新。", "");
+  showDialog("配置已保存", result.cloudDbWritten ? `项目、成品定额和成员名单已经写入${cloudSyncProviderLabel()}。其他成员同步后会自动更新。` : "项目、成品定额和成员名单已经写入共享数据。其他成员同步后会自动更新。", "");
 }
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (s) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[s] || s));

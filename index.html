@@ -65,10 +65,10 @@
               <div class="week-strip" id="dateWeekStrip"></div>
             </div>
             <div class="metric"><span>成员</span><strong id="memberCard">成员A</strong></div>
-            <div class="metric quota-edit"><span>今日定额</span><strong><input id="dailyQuotaInput" type="number" step="0.01" min="0" placeholder="自动"></strong></div>
+            <div class="metric quota-edit"><span>今日成品定额</span><strong><input id="dailyQuotaInput" type="number" step="0.01" min="0" placeholder="自动"></strong></div>
             <div class="metric quota-edit duty-hours-edit"><span>尽本分时长</span><strong><input id="dutyHoursInput" type="number" step="0.01" min="0" placeholder="小时"></strong></div>
             <div class="metric"><span>原始</span><strong id="rawTotal">0</strong></div>
-            <div class="metric"><span>工作量</span><strong id="weightedTotal">0</strong></div>
+            <div class="metric"><span>换算工作量</span><strong id="weightedTotal">0</strong></div>
             <div class="metric"><span>视频成品</span><strong id="videoProductTotal">0</strong></div>
             <div class="metric"><span>AI成品</span><strong id="aiProductTotal">0</strong></div>
             <div class="metric" id="auditCard"><span>完成情况</span><strong id="auditText">待审核</strong></div>
@@ -90,7 +90,7 @@
               <div class="entry-inputs" id="entryInputs"></div>
               <textarea class="hidden" id="entryText" aria-hidden="true"></textarea>
               <table>
-                <thead><tr><th>项目</th><th>数量</th><th>工作量系数</th><th>工作量</th><th>视频成品</th><th>AI成品</th></tr></thead>
+                <thead><tr><th>项目</th><th>数量</th><th>换算系数</th><th>换算工作量</th><th>视频成品</th><th>AI成品</th></tr></thead>
                 <tbody id="previewBody"></tbody>
               </table>
             </div>
@@ -151,9 +151,9 @@
                 <summary><span>完成率</span><strong id="passRate">0%</strong></summary>
                 <small id="passRateDetail">0 / 0 位成员</small>
               </details>
-              <div class="overview-stat-card featured"><span>小组合计</span><strong id="teamTotal">0</strong></div>
-              <div class="overview-stat-card"><span>总定额</span><strong id="teamQuota">0</strong></div>
-              <div class="overview-stat-card"><span>总差额</span><strong id="teamDiff">0</strong></div>
+              <div class="overview-stat-card featured"><span>小组成品</span><strong id="teamTotal">0</strong></div>
+              <div class="overview-stat-card"><span>成品定额</span><strong id="teamQuota">0</strong></div>
+              <div class="overview-stat-card"><span>成品差额</span><strong id="teamDiff">0</strong></div>
             </div>
           </section>
           <section class="panel source-switch-panel">
@@ -240,7 +240,7 @@
           <section class="panel">
             <div class="panel-head"><h2>小组记录总览</h2><span class="hint" id="historyCount"></span></div>
             <table>
-                <thead><tr><th>日期</th><th>成员</th><th>原始</th><th>工作量</th><th>尽本分时长</th><th>状态</th><th>备注</th></tr></thead>
+                <thead><tr><th>日期</th><th>成员</th><th>原始</th><th>换算工作量</th><th>尽本分时长</th><th>状态</th><th>备注</th></tr></thead>
               <tbody id="historyBody"></tbody>
             </table>
           </section>
@@ -421,24 +421,24 @@
           <section class="admin-grid">
             <div class="panel">
               <div class="panel-head">
-                <h2>项目、工作量与成品</h2>
+                <h2>项目、换算工作量与成品</h2>
                 <div class="inline-actions">
                   <button id="addRuleBtn">新增项目</button>
                   <button class="primary" id="adminSaveBtn">保存配置</button>
                 </div>
               </div>
               <div class="form-grid">
-                <label for="quotaInput">默认定额</label>
+                <label for="quotaInput">默认成品定额</label>
                 <input id="quotaInput" type="number" step="0.01" min="0">
               </div>
               <div id="rulesBox"></div>
             </div>
             <div class="panel">
-              <div class="panel-head"><h2>成员定额</h2><span class="hint">留空则使用默认定额</span></div>
+              <div class="panel-head"><h2>成员成品定额</h2><span class="hint">留空则使用默认成品定额，换算工作量备注只做辅助说明</span></div>
               <div class="form-grid quota-date-grid">
-                <label for="adminQuotaDate">定额日期</label>
+                <label for="adminQuotaDate">成品定额日期</label>
                 <input id="adminQuotaDate" type="date">
-                <label for="dateQuotaInput">当天默认定额</label>
+                <label for="dateQuotaInput">当天默认成品定额</label>
                 <input id="dateQuotaInput" type="number" step="0.01" min="0" placeholder="留空则使用长期默认">
               </div>
               <div id="memberQuotaBox"></div>
