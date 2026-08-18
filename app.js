@@ -2384,7 +2384,8 @@ function productTotalsForItems(items = {}, itemNames = configuredItems(), report
   }, { video: 0, ai: 0 });
 }
 function productTotalValue(products = {}) {
-  return Number(products.video || 0) + Number(products.ai || 0);
+  // AI 成品只作辅助参考，不参与成品量、差额和达标计算。
+  return Number(products.video || 0);
 }
 function memberVisibleItems(member = currentMember) {
   const group = data.memberGroups?.[member] || data.groups[0];
