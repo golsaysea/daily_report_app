@@ -21,6 +21,9 @@ const defaultData = {
   groupItems: {},
   memberItems: {},
   memberQuotas: {},
+  workloadQuota: "",
+  memberWorkloadQuotas: {},
+  dailyWorkloadQuotas: {},
   dailyQuotas: {},
   monthlyPlans: {},
   freeTable: { rows: 20, columns: 8, cells: {}, updated_at: "" },
@@ -91,6 +94,9 @@ function normalize(source) {
   data.memberItems = data.memberItems && typeof data.memberItems === "object" ? data.memberItems : {};
   data.memberQuotas = data.memberQuotas && typeof data.memberQuotas === "object" ? data.memberQuotas : {};
   data.dailyQuotas = data.dailyQuotas && typeof data.dailyQuotas === "object" ? data.dailyQuotas : {};
+  data.workloadQuota = data.workloadQuota === "" || data.workloadQuota === undefined || data.workloadQuota === null ? "" : Number(data.workloadQuota || 0);
+  data.memberWorkloadQuotas = data.memberWorkloadQuotas && typeof data.memberWorkloadQuotas === "object" ? data.memberWorkloadQuotas : {};
+  data.dailyWorkloadQuotas = data.dailyWorkloadQuotas && typeof data.dailyWorkloadQuotas === "object" ? data.dailyWorkloadQuotas : {};
   data.monthlyPlans = data.monthlyPlans && typeof data.monthlyPlans === "object" ? data.monthlyPlans : {};
   data.freeTable = normalizeFreeTable(data.freeTable || defaultData.freeTable);
   data.fbSpecialties = Array.isArray(data.fbSpecialties) ? data.fbSpecialties : [];
