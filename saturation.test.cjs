@@ -24,6 +24,18 @@ test('saturation grades use 50, 80 and 100 percent boundaries', () => {
   }
   assert.equal(context.calculate({ unknown: 200 }, {}, 14).passed, false);
 });
+test('product suggestions use actual mix, five-unit rounding and manual daily capacity', () => {
+  vm.runInContext('globalThis.productQuota = Saturation.productQuota;', context);
+  const snapshot = { baseHours: 12, deductions: { cooking: 2 }, rules: { a: 200, b: 100, ai: 100 }, productRules: { a: { video: 1 }, b: { video: 1 }, ai: { video: 0, ai: 1 } }, productQuota: null };
+  assert.equal(context.productQuota({ a: 100, b: 50 }, snapshot), 125);
+  assert.equal(context.productQuota({ a: 100 }, { ...snapshot, deductions: {} }), 200);
+  assert.equal(context.productQuota({}, snapshot), null);
+  assert.equal(context.productQuota({ ai: 50 }, snapshot), null);
+  assert.equal(context.productQuota({}, { ...snapshot, productQuota: 205 }), 175);
+  assert.equal(context.productQuota({ a: 100 }, { ...snapshot, rules: { a: 201 }, deductions: {} }), 205);
+  assert.equal(context.productQuota({ a: 1 }, { ...snapshot, deductions: { x: 12 } }), 0);
+  assert.equal(context.productQuota({ unknown: 1 }, snapshot), null);
+});
 test('Worker retains daily snapshots and latest zero deductions', () => {
   const source = fs.readFileSync('cloudflare-worker.mjs', 'utf8');
   const worker = vm.createContext({});
