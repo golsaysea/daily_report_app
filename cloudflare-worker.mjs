@@ -171,6 +171,7 @@ function normalizeRecordMap(records = {}, rules = defaultData.rules) {
       items,
       raw_total: Number(record.raw_total || 0),
       weighted_total: Number(record.weighted_total || 0),
+      saturation: record.saturation ? clone(record.saturation) : undefined,
       status: String(record.status || "待审核"),
       reason: String(record.reason || ""),
       harvest: String(record.harvest || ""),
@@ -258,6 +259,7 @@ function newerRecord(remoteRecord, localRecord, prefer = "second", rules = defau
   const local = clone(localRecord);
   const base = newerRecordSide(remote, local, prefer);
   const merged = { ...remote, ...local, ...base, items: {}, checkins: mergeCheckins(remote.checkins, local.checkins) };
+  merged.saturation = base.saturation || (base === local ? remote.saturation : local.saturation);
   const itemNames = new Set([
     ...Object.keys(remote.items || {}),
     ...Object.keys(local.items || {}),

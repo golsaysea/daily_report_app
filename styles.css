@@ -513,3 +513,17 @@ tr:last-child td { border-bottom: 0; }
   .ranking-row { grid-template-columns: 30px minmax(0, 1fr); align-items: start; }
   .ranking-score, .ranking-status { grid-column: 2; justify-self: start; text-align: left; }
 }
+/* Legacy values remain stored and available in backups. */
+.metric:has(#dailyWorkloadQuotaInput), .metric:has(#weightedTotal), #workloadAuditCard { display: none; }
+#rulesBox .rule-row > :nth-child(3) { display: none; }
+#rulesBox .rule-row { grid-template-columns: 28px minmax(120px, 1fr) repeat(3, minmax(65px, 90px)) 32px; }
+#saturationEntry, #saturationAdmin { margin-top: 16px; padding-top: 12px; border-top: 1px solid #d7dfd9; }
+.saturation-times { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 10px; margin: 12px 0; }
+.saturation-times label { display: grid; gap: 5px; font-size: 12px; }
+.saturation-times input { width: 100%; min-width: 0; }
+#saturationSummary { font-size: 14px; font-weight: 600; line-height: 1.7; }
+#saturationDetails { padding: 10px 0; line-height: 1.7; }
+.saturation-table { overflow: auto; max-height: 480px; }
+#saturationOverview { margin: 16px 0; padding: 12px; background: white; }
+#saturationOverview td { white-space: nowrap; font-variant-numeric: tabular-nums; }
+#entryTable th:nth-child(3), #entryTable th:nth-child(4), #entryTable td:nth-child(3), #entryTable td:nth-child(4) { display: none; }

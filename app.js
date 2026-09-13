@@ -220,6 +220,8 @@ function compactCloudSyncData(mode = "records") {
     rules: data.rules,
     productRules: data.productRules,
     totalConversionRules: data.totalConversionRules,
+    saturationSettings: data.saturationSettings,
+    legacyWorkloadArchive: data.legacyWorkloadArchive,
     members: data.members,
     groups: data.groups,
     memberGroups: data.memberGroups,
@@ -2926,6 +2928,7 @@ function recordContentSnapshot(record = {}) {
     harvest: record.harvest || "",
     diary: record.diary || "",
     duty_hours: dutyHoursValue(record),
+    saturation: record.saturation || null,
     workload_quota_total: Number(record.workload_quota_total || 0),
     checkins: sortedCheckins(record.checkins || {})
   };
@@ -3093,7 +3096,7 @@ function renderEntryInputs(seedItems = readEntryInputs()) {
       <div class="entry-field">
         <label>${escapeHtml(name)}</label>
         <input type="number" step="0.01" inputmode="decimal" data-entry-item="${escapeAttr(name)}" value="${value || ""}" placeholder="0">
-        <small>换算系数 ${fmt(weight)}</small>
+        <small data-saturation-item="${escapeAttr(name)}">工作饱和量</small>
       </div>
     `;
   }).join("");
@@ -3110,6 +3113,7 @@ function renderEntryInputs(seedItems = readEntryInputs()) {
 }
 function preview() {
   const items = readEntryInputs();
+  previewSaturation(items);
   const parsed = { items, ...entryTotals(items) };
   const products = productTotalsForItems(items, Object.keys(items), data);
   const quota = memberQuota(currentMember);
@@ -3159,6 +3163,7 @@ function loadForm() {
     $("dailyWorkloadQuotaInput").placeholder = fmt(memberWorkloadQuota(currentMember, currentDate));
   }
   if ($("dutyHoursInput")) $("dutyHoursInput").value = dutyHoursValue(rec) || "";
+  renderSaturationEntry(rec);
   $("entryText").value = rec.text || "";
   renderEntryInputs(Object.keys(rec.items || {}).length ? rec.items : parseEntry(rec.text || "").items);
   $("statusSelect").value = ["自动判断", "完全达标", "达标", "不达标", "待审核"].includes(rec.status) ? rec.status : "自动判断";
@@ -3169,6 +3174,7 @@ function loadForm() {
   preview();
 }
 function saveFormSilently() {
+  archiveLegacyWorkload();
   data.quota = Number($("quotaInput").value || 0);
   if ($("completeQuotaInput")) data.completeQuota = $("completeQuotaInput").value === "" ? "" : Number($("completeQuotaInput").value || 0);
   if ($("dailyQuotaInput")) setDailyMemberQuota(currentMember, currentDate, $("dailyQuotaInput").value);
@@ -3197,6 +3203,7 @@ function saveFormSilently() {
     complete_quota_total: completeQuota,
     workload_quota_total: workloadQuota,
     duty_hours: dutyHours,
+    saturation: saturationRecordInput(),
     status: finalStatus,
     reason: $("reasonText").value.trim(),
     harvest: $("harvestText").value.trim(),
@@ -3312,6 +3319,7 @@ function deleteRules(names = []) {
   scheduleSave("admin");
 }
 function renderRules() {
+  renderSaturationAdmin();
   $("rulesBox").innerHTML = `
     <div class="rule-admin-tools">
       <button type="button" data-delete-selected-rules>删除勾选项目</button>
@@ -3323,7 +3331,7 @@ function renderRules() {
       <span>换算工作量</span>
       <span>视频成品</span>
       <span>AI成品</span>
-      <span>总数日量</span>
+      <span>工作饱和日量</span>
       <span></span>
     </div>
   `;
@@ -3345,6 +3353,7 @@ function renderRules() {
     inputs[1].onchange = () => renameRule(name, inputs[1].value.trim(), Number(inputs[2].value), Number(inputs[3].value), Number(inputs[4].value), Number(inputs[5].value));
     [inputs[2], inputs[3], inputs[4], inputs[5]].forEach((input) => {
       input.oninput = () => {
+        archiveLegacyWorkload();
         data.rules[name] = Number(inputs[2].value || 0);
         data.productRules[name] = {
           video: Number(inputs[3].value || 0),
@@ -4485,6 +4494,7 @@ function selectOverviewMember(member, report = reportData()) {
 }
 function renderOverview() {
   if (!reportDataOverride) return withReportData(selectedReportData(), renderOverview);
+  renderSaturationOverview();
   const report = reportData();
   renderReportSourceTabs();
   renderOverviewGroupPicker(report);
