@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const context = vm.createContext({});
-vm.runInContext(fs.readFileSync('saturation.js', 'utf8') + '\nglobalThis.calculate = Saturation.calculate;', context);
+const appSource = fs.readFileSync('app.js', 'utf8');
+vm.runInContext(appSource.slice(0, appSource.indexOf('const defaultData =')) + '\nglobalThis.calculate = Saturation.calculate;', context);
 test('daily target deducts hours and sums project fractions', () => {
   const result = context.calculate({ phrase: 120 }, { phrase: 150 }, 12, { cooking: 2 });
   assert.equal(result.details[0].adjusted, 125);
