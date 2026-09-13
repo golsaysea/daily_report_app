@@ -1,5 +1,6 @@
 /* Daily capacity uses the recorded settings so later edits do not rewrite history. */
 const Saturation = (() => {
+  const extraOptions = ['写代码时间', '兼职本分时间', '沟通工作时间', '看视频时间', '学唱歌时间', '写文章时间'];
   const options = ['个人事情时间', '上班时间', '上学时间', '听交通时间', '聚会时间', '值日做饭时间', '买菜时间', '干农活时间'];
   const number = value => Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
   function calculate(items, rules, baseHours, deductions = {}) {
@@ -15,14 +16,37 @@ const Saturation = (() => {
     });
     const total = details.reduce((sum, row) => sum + row.value, 0);
     const ratio = target ? total / target : null;
-    const status = deducted > base ? '杂项时间超出基准' : !available ? '无可用工作时间' : missing.length ? '项目日量未设置' : total + 1e-9 >= target ? '饱和' : '未饱和';
-    return { base, deducted, available, target, total, ratio, status, details, missing };
+    const invalid = deducted > base ? '杂项时间超出基准' : !available ? '无可用工作时间' : missing.length ? '项目日量未设置' : '';
+    const grade = classify(invalid ? null : ratio);
+    return { base, deducted, available, target, total, ratio: invalid ? null : ratio, ...grade, status: invalid || grade.status, details, missing };
   }
-  return { options, calculate };
+  function classify(ratio) {
+    if (ratio === null || !Number.isFinite(ratio)) return { status: '未结算', level: 'unknown', passed: false };
+    if (ratio >= 1 - 1e-9) return { status: '合格', level: 'qualified', passed: true };
+    if (ratio >= 0.8) return { status: '接近达标', level: 'near', passed: false };
+    if (ratio >= 0.5) return { status: '危险', level: 'danger', passed: false };
+    return { status: '非常低', level: 'low', passed: false };
+  }
+  return { options: [...options, ...extraOptions], extraOptions, calculate, classify };
 })();
 
 function saturationSettings() {
-  return data.saturationSettings || { memberHours: {}, options: Saturation.options };
+  const settings = data.saturationSettings || { memberHours: {}, options: Saturation.options };
+  return { ...settings, options: settings.optionsVersion === 2 ? settings.options : [...new Set([...(settings.options || Saturation.options), ...Saturation.extraOptions])] };
+}
+function saturationForRange(member, days, report = reportData()) {
+  const entries = days.map(day => report.records?.[`${day}|${member}`]).map(record => record?.saturation ? Saturation.calculate(record.items, record.saturation.rules, record.saturation.baseHours, record.saturation.deductions) : null);
+  const total = entries.reduce((sum, entry) => sum + (entry?.total || 0), 0);
+  const target = entries.reduce((sum, entry) => sum + (entry?.target || 0), 0);
+  const valid = entries.length > 0 && entries.every(entry => entry && entry.level !== 'unknown');
+  const ratio = valid && target > 0 ? total / target : null;
+  return { total, target, ratio, ...Saturation.classify(ratio) };
+}
+function saturationRows(rows) {
+  const total = rows.reduce((sum, row) => sum + (row.saturation?.total || 0), 0);
+  const target = rows.reduce((sum, row) => sum + (row.saturation?.target || 0), 0);
+  const ratio = rows.length && rows.every(row => row.saturation?.ratio != null) && target > 0 ? total / target : null;
+  return { total, target, ratio, ...Saturation.classify(ratio) };
 }
 function archiveLegacyWorkload() {
   if (data.legacyWorkloadArchive) return;
@@ -71,6 +95,17 @@ function previewSaturation(items) {
   const result = Saturation.calculate(items, settings.rules, settings.baseHours, settings.deductions);
   const box = document.getElementById('saturationSummary');
   if (box) box.textContent = `${result.status} · 饱和量 ${fmt(result.total)} / ${fmt(result.target)} · ${result.ratio === null ? '—' : fmt(result.ratio * 100) + '%'} · 基准 ${fmt(result.base)} 小时 · 杂项 ${fmt(result.deducted)} 小时 · 工作 ${fmt(result.available)} 小时`;
+  if (box) {
+    box.className = `saturation-grade saturation-${result.level}`;
+    const progress = document.createElement('progress');
+    progress.max = 100; progress.value = Math.min(100, (result.ratio || 0) * 100);
+    progress.setAttribute('aria-label', '工作饱和度进度'); box.appendChild(progress);
+  }
+  document.querySelectorAll('[data-saturation-time]').forEach(input => {
+    let percent = input.parentElement.querySelector('small');
+    if (!percent) { percent = document.createElement('small'); input.after(percent); }
+    percent.textContent = `占全天 ${fmt(Math.max(0, Number(input.value) || 0) / result.base * 100)}%`;
+  });
   document.querySelectorAll('[data-saturation-item]').forEach(el => {
     const row = result.details.find(row => row.name === el.dataset.saturationItem);
     el.textContent = row?.quota ? `工作饱和量 ${fmt(row.value)}` : '饱和日量未设置';
@@ -91,7 +126,7 @@ function renderSaturationAdmin() {
     archiveLegacyWorkload();
     const memberHours = { ...settings.memberHours };
     box.querySelectorAll('[data-member-hours]').forEach(input => { memberHours[input.dataset.memberHours] = Math.min(24, Math.max(0.25, Number(input.value) || 14)); });
-    data.saturationSettings = { memberHours, options: [...new Set(document.getElementById('saturationOptions').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean))] };
+    data.saturationSettings = { memberHours, optionsVersion: 2, options: [...new Set(document.getElementById('saturationOptions').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean))] };
     scheduleSave('admin');
   };
   box.querySelectorAll('input,textarea').forEach(input => { input.onchange = save; });
@@ -116,7 +151,7 @@ function renderSaturationOverview() {
     const result = saved ? Saturation.calculate(record.items, saved.rules, saved.baseHours, saved.deductions) : null;
     rows.push([day, member, result ? fmt(result.available) : '—', result ? fmt(result.total) : '—', result ? fmt(result.target) : '—', result?.ratio != null ? fmt(result.ratio * 100) + '%' : '—', result?.status || '未结算']);
   }
-  box.innerHTML = `<h3>每日工作饱和结算</h3><div class="saturation-table"><table><thead><tr>${['日期','成员','工作小时','饱和量','当日目标','饱和度','状态'].map(value => `<th>${value}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(value => `<td>${escapeHtml(value)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  box.innerHTML = `<h3>每日工作饱和结算</h3><div class="saturation-table"><table><thead><tr>${['日期','成员','工作小时','饱和量','当日目标','饱和度','等级'].map(value => `<th>${value}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr class="${quotaStatusClass(row[6])}">${row.map(value => `<td>${escapeHtml(value)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
 
 const defaultData = {
@@ -2363,26 +2398,22 @@ function quotaTier(member, day = currentDate) {
   return { quota, completeQuota };
 }
 function quotaStatusFromTotals(productTotal, quota, completeQuota = quota) {
-  const total = Number(productTotal || 0);
-  const pass = Number(quota || 0);
-  const complete = Math.max(pass, Number(completeQuota || 0));
-  if (pass <= 0 && complete <= 0) return "完全达标";
-  if (complete > 0 && total >= complete) return "完全达标";
-  if (pass > 0 && total >= pass) return "达标";
-  if (pass <= 0 && total > 0) return "完全达标";
-  return "不达标";
+  // Legacy export callers without time snapshots cannot determine saturation.
+  return "未结算";
 }
 function quotaStatusFor(member, day, productTotal) {
-  const tier = quotaTier(member, day);
-  return quotaStatusFromTotals(productTotal, tier.quota, tier.completeQuota);
+  return saturationForRange(member, [day]).status;
 }
 function quotaStatusClass(status) {
+  const grades = { '合格': 'saturation-qualified', '接近达标': 'saturation-near', '危险': 'saturation-danger', '非常低': 'saturation-low' };
+  if (grades[status]) return grades[status];
   if (status === "完全达标") return "complete";
   if (status === "达标") return "pass";
   if (status === "不达标" || status === "未达标" || status === "未达") return "fail";
   return "pending";
 }
 function quotaStatusShort(status) {
+  if (['合格', '接近达标', '危险', '非常低', '未结算'].includes(status)) return status;
   if (status === "完全达标") return "完全";
   if (status === "达标") return "达标";
   if (status === "不达标" || status === "未达标") return "未达";
@@ -2487,7 +2518,8 @@ function summarizeOverviewRows(rows = []) {
     ai: rows.reduce((sum, row) => sum + Number(row.ai || 0), 0),
     diff: productTotal - quota,
     completeDiff: productTotal - completeQuota,
-    status: quotaStatusFromTotals(productTotal, quota, completeQuota)
+    saturation: saturationRows(rows),
+    status: saturationRows(rows).status
   };
 }
 function overviewSubgroupBriefLines(rows = []) {
@@ -3237,26 +3269,26 @@ function renderEntryInputs(seedItems = readEntryInputs()) {
 }
 function preview() {
   const items = readEntryInputs();
-  previewSaturation(items);
+  const saturation = previewSaturation(items);
   const parsed = { items, ...entryTotals(items) };
   const products = productTotalsForItems(items, Object.keys(items), data);
   const quota = memberQuota(currentMember);
   const completeQuota = memberCompleteQuota(currentMember);
   const workloadQuota = memberWorkloadQuota(currentMember);
   const productTotal = productTotalValue(products);
-  const computedStatus = quotaStatusFromTotals(productTotal, quota, completeQuota);
+  const computedStatus = saturation.status;
   const workloadStatus = workloadQuotaStatus(parsed.weighted, workloadQuota);
-  const passed = computedStatus !== "不达标";
+  const passed = saturation.passed;
   $("rawTotal").textContent = fmt(parsed.raw);
   $("weightedTotal").textContent = fmt(parsed.weighted);
   if ($("workloadAuditText")) $("workloadAuditText").textContent = workloadQuotaText(parsed.weighted, workloadQuota);
   if ($("workloadAuditCard")) $("workloadAuditCard").className = `metric ${workloadQuotaClass(workloadStatus)}`;
   if ($("videoProductTotal")) $("videoProductTotal").textContent = fmt(products.video);
   if ($("aiProductTotal")) $("aiProductTotal").textContent = fmt(products.ai);
-  $("auditText").textContent = computedStatus === "完全达标" ? "完全达标 ✓" : (passed ? "达标 ✓" : "不达标");
+  $("auditText").textContent = `${computedStatus} · ${saturation.ratio == null ? '未结算' : fmt(saturation.ratio * 100) + '%'}${saturation.level === 'unknown' ? '' : passed ? ' · 达标' : ' · 未达标'}`;
   $("auditCard").className = `metric ${quotaStatusClass(computedStatus)}`;
   const manualStatus = $("statusSelect")?.value || "自动判断";
-  const displayStatus = manualStatus === "自动判断" ? "待审核" : manualStatus;
+  const displayStatus = computedStatus;
   $("statusPill").textContent = displayStatus;
   $("statusPill").className = `status ${quotaStatusClass(displayStatus)}`;
   if ($("dailyQuotaInput")) $("dailyQuotaInput").placeholder = fmt(memberQuota(currentMember, currentDate));
@@ -3313,10 +3345,11 @@ function saveFormSilently() {
   const dutyHours = normalizeDutyHours($("dutyHoursInput")?.value);
   const products = productTotalsForItems(items, Object.keys(items), data);
   const productTotal = productTotalValue(products);
-  const autoStatus = quotaStatusFromTotals(productTotal, quota, completeQuota);
+  const satInput = saturationRecordInput();
+  const autoStatus = Saturation.calculate(items, satInput.rules, satInput.baseHours, satInput.deductions).status;
   const selected = $("statusSelect").value;
   const rec = currentRecord();
-  const finalStatus = selected === "自动判断" ? "待审核" : selected;
+  const finalStatus = autoStatus;
   const nextRecord = {
     date: currentDate,
     member: currentMember,
@@ -3393,7 +3426,8 @@ function renderMembers() {
       const defaultCompleteQuota = quotaValue(data.memberCompleteQuotas?.[name]) ?? quotaValue(data.completeQuota) ?? defaultQuota;
       const btn = document.createElement("button");
       btn.className = `member ${name === currentMember ? "active" : ""}`;
-      btn.innerHTML = `<span><span>${escapeHtml(name)}</span><small>今日 ${fmt(todayQuota)}/${fmt(todayCompleteQuota)} · 默认 ${fmt(defaultQuota)}/${fmt(Math.max(Number(defaultQuota || 0), Number(defaultCompleteQuota || 0)))}</small></span><span class="badge">${memberTodayStatus(name)}</span>`;
+      const saturation = saturationForRange(name, [currentDate], data);
+      btn.innerHTML = `<span><span>${escapeHtml(name)}</span><small>饱和度 ${saturation.ratio == null ? '未结算' : fmt(saturation.ratio * 100) + '%'}</small></span><span class="badge saturation-${saturation.level}">${saturation.status}</span>`;
       btn.onclick = () => {
         saveFormSilently();
         currentMember = name;
@@ -3413,12 +3447,7 @@ function renderMembers() {
   $("memberCard").textContent = currentMember;
 }
 function memberTodayStatus(name) {
-  const rec = data.records[`${currentDate}|${name}`];
-  if (!rec) return "未填";
-  if (rec.status === "完全达标") return "完全";
-  if (rec.status === "达标") return "达标";
-  if (rec.status === "不达标") return "未达";
-  return "待审";
+  return saturationForRange(name, [currentDate], data).status;
 }
 function deleteRules(names = []) {
   const unique = Array.from(new Set(names.map((name) => String(name || "").trim()).filter((name) => data.rules[name] !== undefined)));
@@ -4047,9 +4076,9 @@ function aggregateMemberRange(member, days, report, itemNames) {
   const products = productTotalsForItems(items, itemNames, report);
   const totalConversion = totalConversionForItems(items, itemNames, report).total;
   const productTotal = productTotalValue(products);
-  const status = quotaStatusFromTotals(productTotal, quota, completeQuota);
-  const rateBase = completeQuota || quota;
-  const rate = rateBase > 0 ? Math.min(100, Math.round((productTotal / rateBase) * 100)) : 100;
+  const saturation = saturationForRange(member, days, report);
+  const status = saturation.status;
+  const rate = Math.min(100, Math.round((saturation.ratio || 0) * 100));
   return {
     member,
     subgroup: memberSubgroup(member, report),
@@ -4072,9 +4101,10 @@ function aggregateMemberRange(member, days, report, itemNames) {
     completeDiff: productTotal - completeQuota,
     video: products.video,
     ai: products.ai,
+    saturation,
     status,
-    passed: status !== "不达标",
-    completePassed: status === "完全达标",
+    passed: saturation.passed,
+    completePassed: saturation.passed,
     rate,
     checkinCount,
     checkinSlots,
@@ -4279,10 +4309,7 @@ function overviewBriefProductValue(source = {}) {
   return Number(source.video ?? source.productTotal ?? 0);
 }
 function overviewBriefStatus(productTotal, quota) {
-  const total = Number(productTotal || 0);
-  const target = Number(quota || 0);
-  if (target <= 0) return total > 0 ? "达标" : "不达标";
-  return total >= target ? "达标" : "不达标";
+  return '未结算';
 }
 function overviewBriefDiffText(productTotal, quota) {
   const diff = cleanTotalValue(Number(productTotal || 0) - Number(quota || 0));
@@ -4291,13 +4318,13 @@ function overviewBriefDiffText(productTotal, quota) {
 }
 function overviewGroupBriefLine(row, itemNames) {
   const product = overviewBriefProductValue(row);
-  const status = overviewBriefStatus(product, row.quota || 0);
+  const status = row.saturation?.status || '未结算';
   const note = String(row.note || "").trim();
   const parts = [
     `${row.member}：${status}`,
-    `定额 ${fmt(row.quota)}`,
+    `饱和度 ${row.saturation?.ratio == null ? '未结算' : fmt(row.saturation.ratio * 100) + '%'}`,
     `成品量 ${fmt(product)}`,
-    `差额 ${overviewBriefDiffText(product, row.quota || 0)}`,
+    `判定 ${row.saturation?.ratio == null ? '未结算' : row.saturation.passed ? '达标' : '未达标'}`,
     `项目 ${overviewGroupBriefItemDetail(row, itemNames)}`,
     note ? `备注 ${note}` : ""
   ].filter(Boolean);
@@ -4305,11 +4332,11 @@ function overviewGroupBriefLine(row, itemNames) {
 }
 function overviewGroupBriefReasonText(row, itemNames) {
   const product = overviewBriefProductValue(row);
-  const status = overviewBriefStatus(product, row.quota || 0);
+  const status = row.saturation?.status || '未结算';
   const note = String(row.note || "").trim();
   const lines = [
     `${row.member}：${status}`,
-    `   定额：${fmt(row.quota)}｜成品量：${fmt(product)}｜差额：${overviewBriefDiffText(product, row.quota || 0)}`,
+    `   饱和度：${row.saturation?.ratio == null ? '未结算' : fmt(row.saturation.ratio * 100) + '%'}｜成品量：${fmt(product)}｜${row.saturation?.ratio == null ? '未结算' : row.saturation.passed ? '达标' : '未达标'}`,
     `   项目明细：${overviewGroupBriefItemDetail(row, itemNames)}`
   ];
   if (note) lines.push(`   备注：${note}`);
@@ -4321,16 +4348,16 @@ function buildOverviewGroupBriefTextForRange(group, range, label, report = repor
   const groupRows = membersForGroupValue(group, report).map((member) => aggregateMemberRange(member, days, report, itemNames));
   const summary = summarizeOverviewRows(groupRows);
   const product = overviewBriefProductValue(summary);
-  const status = overviewBriefStatus(product, summary.quota);
+  const status = summary.status;
   const detailLines = sortedOverviewGroupRows(groupRows).length
     ? sortedOverviewGroupRows(groupRows).map((row) => overviewGroupBriefReasonText(row, itemNames))
     : ["暂无成员数据。"];
   return [
     `${group} ${label}报数`,
     `时间：${rangeText(range)}`,
-    `定额：${fmt(summary.quota)}`,
+    `饱和度：${summary.saturation.ratio == null ? '未结算' : fmt(summary.saturation.ratio * 100) + '%'}`,
     `成品量：${fmt(product)}`,
-    `差额：${overviewBriefDiffText(product, summary.quota)}`,
+    `判定：${summary.saturation.ratio == null ? '未结算' : summary.saturation.passed ? '达标' : '未达标'}`,
     `状态：${status}`,
     "成员达标与项目明细：",
     ...detailLines
@@ -4352,7 +4379,7 @@ function overviewGroupBriefRows(group, report = reportData()) {
   const groupRows = membersForGroupValue(group, report).map((member) => aggregateMemberRange(member, days, report, itemNames));
   const summary = summarizeOverviewRows(groupRows);
   const product = overviewBriefProductValue(summary);
-  const status = overviewBriefStatus(product, summary.quota);
+  const status = summary.status;
   const reasonLines = sortedOverviewGroupRows(groupRows).length
     ? sortedOverviewGroupRows(groupRows).map((row) => overviewGroupBriefLine(row, itemNames))
     : ["暂无成员数据。"];
@@ -4411,16 +4438,16 @@ function overviewRowsPrimaryGroupLabel(rows = [], report = reportData()) {
 function overviewRowsBriefText(title, range, label, rows, itemNames, sourceLabel = "") {
   const summary = summarizeOverviewRows(rows);
   const product = overviewBriefProductValue(summary);
-  const status = overviewBriefStatus(product, summary.quota);
+  const status = summary.status;
   const detailLines = sortedOverviewGroupRows(rows).length
     ? sortedOverviewGroupRows(rows).map((row) => overviewGroupBriefReasonText(row, itemNames))
     : ["暂无成员数据。"];
   return [
     `${title} ${label}报数`,
     `时间：${rangeText(range)}`,
-    `定额：${fmt(summary.quota)}`,
+    `饱和度：${summary.saturation.ratio == null ? '未结算' : fmt(summary.saturation.ratio * 100) + '%'}`,
     `成品量：${fmt(product)}`,
-    `差额：${overviewBriefDiffText(product, summary.quota)}`,
+    `判定：${summary.saturation.ratio == null ? '未结算' : summary.saturation.passed ? '达标' : '未达标'}`,
     `状态：${status}`,
     "成员达标与项目明细：",
     ...detailLines
@@ -4429,19 +4456,19 @@ function overviewRowsBriefText(title, range, label, rows, itemNames, sourceLabel
 function overviewRowsBriefRows(title, range, rows, itemNames, sourceLabel = "") {
   const summary = summarizeOverviewRows(rows);
   const product = overviewBriefProductValue(summary);
-  const status = overviewBriefStatus(product, summary.quota);
+  const status = summary.status;
   const reasonLines = sortedOverviewGroupRows(rows).length
     ? sortedOverviewGroupRows(rows).map((row) => overviewGroupBriefLine(row, itemNames))
     : ["暂无成员数据。"];
   return [
     [styledCell(`${title}｜${rangeText(range)}`, "sTitle", { mergeAcross: 6 })],
-    ["对象", "范围", "定额", "成品量", "差额", "状态", "成员达标与项目明细"].map((header) => styledCell(header, "sHeader")),
+    ["对象", "范围", "饱和度", "成品量", "判定", "等级", "成员达标与项目明细"].map((header) => styledCell(header, "sHeader")),
     [
       styledCell(title, "sDate"),
       styledCell(rangeText(range), "sItem"),
-      styledCell(summary.quota, "sQuota"),
+      styledCell(summary.saturation.ratio == null ? '未结算' : fmt(summary.saturation.ratio * 100) + '%', "sTotal"),
       styledCell(product, "sTotal"),
-      styledCell(overviewBriefDiffText(product, summary.quota), status === "达标" ? "sDiffGood" : "sDiffBad"),
+      styledCell(summary.saturation.ratio == null ? '未结算' : summary.saturation.passed ? '达标' : '未达标', summary.saturation.passed ? "sDiffGood" : "sDiffBad"),
       styledCell(status, mixedExportStatusStyle(status)),
       styledCell(reasonLines.join("\n"), "sNote")
     ]
@@ -4643,7 +4670,7 @@ function renderOverview() {
   const totalProduct = rows.reduce((sum, row) => sum + Number(row.productTotal || 0), 0);
   const totalQuota = rows.reduce((sum, row) => sum + row.quota, 0);
   const totalCompleteQuota = rows.reduce((sum, row) => sum + row.completeQuota, 0);
-  const teamStatus = quotaStatusFromTotals(totalProduct, totalQuota, totalCompleteQuota);
+  const teamStatus = saturationRows(rows).status;
   const teamPassed = teamStatus !== "不达标";
   const itemTotals = itemNames.reduce((totals, name) => {
     totals[name] = rows.reduce((sum, row) => sum + Number(row.items[name] || 0), 0);
@@ -4653,13 +4680,13 @@ function renderOverview() {
   $("passCount").textContent = String(pass);
   $("failCount").textContent = String(fail);
   $("passRate").textContent = rows.length ? `${Math.round(pass / rows.length * 100)}%` : "0%";
-  if ($("passRateDetail")) $("passRateDetail").textContent = `${completePass} 完全 / ${pass} 达标 / ${rows.length} 位成员`;
+  if ($("passRateDetail")) $("passRateDetail").textContent = `${pass} 合格 / ${rows.length} 位成员`;
   $("teamTotal").textContent = fmt(totalProduct);
   $("teamQuota").textContent = `${fmt(totalQuota)} / ${fmt(totalCompleteQuota)} ${teamStatus === "完全达标" ? "✓" : ""}`;
   $("teamDiff").textContent = `${totalProduct - totalQuota >= 0 ? "+" : ""}${fmt(totalProduct - totalQuota)}`;
   if ($("teamWorkloadQuota")) $("teamWorkloadQuota").textContent = fmt(totalWorkloadQuota);
   if ($("teamWorkloadDiff")) $("teamWorkloadDiff").textContent = signedTotalText(totalWeighted - totalWorkloadQuota);
-  $("overviewHint").textContent = `${rangeText(range)} · ${rows.length} 位成员 · 团队${teamStatus} · 一级差额 ${signedTotalText(totalProduct - totalQuota)} · 完全差额 ${signedTotalText(totalProduct - totalCompleteQuota)} · 换算工作量 ${fmt(totalWeighted)} · 工作量差额 ${signedTotalText(totalWeighted - totalWorkloadQuota)}`;
+  $("overviewHint").textContent = `${rangeText(range)} · ${rows.length} 位成员 · 团队${teamStatus} · 饱和度 ${saturationRows(rows).ratio == null ? '未结算' : fmt(saturationRows(rows).ratio * 100) + '%'}`;
   const rowCard = (row) => `
     <article class="person-card ${quotaStatusClass(row.status)}" data-overview-member="${escapeAttr(row.member)}" title="点击切换这个成员的明细和打卡">
       <div class="person-top">
@@ -4668,9 +4695,8 @@ function renderOverview() {
       </div>
       <div class="subgroup-pill">自由编队 ${escapeHtml(row.subgroup || "未分队")}</div>
       <div class="progress" title="${row.rate}%"><span style="--w:${row.rate}%"></span></div>
-      <div class="hint">成品量 ${fmt(row.productTotal || 0)} / ${quotaLabel} ${fmt(row.quota)} / 完全 ${fmt(row.completeQuota)}</div>
-      <div class="hint">一级差额 ${signedTotalText(row.diff)} · 完全差额 ${signedTotalText(row.completeDiff)}</div>
-      <div class="hint">换算工作量 ${fmt(row.weighted)} / 定额 ${fmt(row.workloadQuota || 0)} · ${workloadQuotaText(row.weighted, row.workloadQuota)}</div>
+      <div class="hint">成品量 ${fmt(row.productTotal || 0)} · 饱和度 ${row.saturation.ratio == null ? '未结算' : fmt(row.saturation.ratio * 100) + '%'}</div>
+      <div class="hint">${row.saturation.status} · ${row.saturation.ratio == null ? '未结算' : row.saturation.passed ? '达标' : '未达标'}</div>
       <div class="hint">尽本分 ${fmtDutyHours(row.dutyHours || 0)}</div>
       <div class="hint">打卡 ${row.checkinCount}/${row.checkinSlots}</div>
       <div class="hint">${escapeHtml(row.note || "暂无备注")}</div>
@@ -4683,7 +4709,7 @@ function renderOverview() {
       <details class="overview-group" open>
         <summary>
           <span>${escapeHtml(group)} · ${groupRows.length} 人</span>
-          <strong>${fmt(groupSummary.productTotal)} / ${fmt(groupSummary.quota)} / ${fmt(groupSummary.completeQuota)}<small> · ${groupSummary.status} · 换算 ${fmt(groupSummary.weighted)} / 工作量定额 ${fmt(groupSummary.workloadQuota)}</small></strong>
+          <strong>成品 ${fmt(groupSummary.productTotal)}<small> · ${groupSummary.status} · 饱和度 ${groupSummary.saturation.ratio == null ? '未结算' : fmt(groupSummary.saturation.ratio * 100) + '%'}</small></strong>
           <span class="overview-export-actions">
             <button class="overview-export-btn" type="button" data-overview-export-group="${escapeAttr(group)}">表格</button>
             <button class="overview-export-btn" type="button" data-overview-export-text-group="${escapeAttr(group)}">TXT</button>
@@ -5032,7 +5058,7 @@ function renderMixedOverviewTable() {
   let totalWorkloadQuota = 0;
   let totalDutyHours = 0;
   $('mixedTableHint').textContent = member
-    ? `${mixedTableGroup} · ${member} · ${start} 至 ${end} · ${itemNames.length} 个组项目 · 一级/完全定额 · 主看成品量 · ${editable ? '可直接编辑' : '当前范围只读'}`
+    ? `${mixedTableGroup} · ${member} · ${start} 至 ${end} · ${itemNames.length} 个组项目 · 按饱和度结算 · ${editable ? '可直接编辑' : '当前范围只读'}`
     : '请选择成员';
   $('mixedTableHead').innerHTML = `
     <tr>
@@ -5081,7 +5107,7 @@ function renderMixedOverviewTable() {
     });
     const diff = productTotal - quota;
     const workloadDiff = weighted - workloadQuota;
-    const status = quotaStatusFromTotals(productTotal, quota, completeQuota);
+    const status = saturationForRange(member, [day], report).status;
     return `
       <tr>
         <td class="mixed-date">${escapeHtml(day.slice(5))}</td>
@@ -5112,9 +5138,10 @@ function renderMixedOverviewTable() {
   const totalDiff = totalProduct - totalQuota;
   const totalSaturation = totalConversionSaturation(totalConversion, days.length);
   const totalConversionLabel = totalConversion ? ` · 总数换算 ${fmtTotalConversion(totalConversion)}天 / 周期 ${days.length}天 · 饱和度 ${fmt(totalSaturation)}% · ${totalConversionStatus(totalConversion, days.length)}` : "";
-  const totalStatus = quotaStatusFromTotals(totalProduct, totalQuota, totalCompleteQuota);
+  const totalStatus = saturationForRange(member, days, report).status;
   if (member) {
-    $('mixedTableHint').textContent = `${mixedTableGroup} · ${member} · ${start} 至 ${end} · ${itemNames.length} 个组项目 · 一级/完全定额 · 主看成品量${totalConversionLabel} · ${editable ? '可直接编辑' : '当前范围只读'}`;
+    const saturation = saturationForRange(member, days, report);
+    $('mixedTableHint').textContent = `${mixedTableGroup} · ${member} · ${start} 至 ${end} · 饱和度 ${saturation.ratio == null ? '未结算' : fmt(saturation.ratio * 100) + '%'} · ${saturation.status} · ${editable ? '可直接编辑' : '当前范围只读'}`;
   }
   rows.unshift(`
     <tr class="mixed-summary-row">
@@ -6839,15 +6866,16 @@ function buildMixedSummaryText() {
     });
     const totalProduct = productTotalValue({ video: totalVideoProduct, ai: totalAiProduct });
     const diff = totalProduct - totalQuota;
-    const status = cleanTotalValue(diff) >= 0 ? "达标" : "未达标";
+    const saturation = saturationForRange(member, days, report);
+    const status = saturation.status;
     const detail = Object.entries(itemTotals)
       .filter(([, amount]) => cleanTotalValue(amount) !== 0)
       .map(([name, amount]) => `${name}：${fmtTotal(amount)}`)
       .join('，') || '暂无项目明细';
     return [
       `视频成品：${fmtTotal(totalProduct)}`,
-      `定额：${fmtTotal(totalQuota)}`,
-      `差额：${signedTotalText(diff)}`,
+      `饱和度：${saturation.ratio == null ? '未结算' : fmt(saturation.ratio * 100) + '%'}`,
+      `判定：${saturation.ratio == null ? '未结算' : saturation.passed ? '达标' : '未达标'}`,
       `状态：${status}`,
       `辅助AI成品：${fmtTotal(totalAiProduct)}`,
       `总数换算量：${fmtTotalConversion(totalConversion)}天`,
@@ -7097,6 +7125,8 @@ function mixedExportCheckinStyle(value) {
   return "sCheckinBlue";
 }
 function mixedExportStatusStyle(status) {
+  if (status === '合格') return 'sDiffGood';
+  if (['非常低', '危险', '接近达标'].includes(status)) return 'sDiffBad';
   if (/(未|待|不|失败)/.test(String(status || ""))) return "sStatusBad";
   if (status) return "sStatusGood";
   return "sItem";
@@ -7119,7 +7149,7 @@ function mixedExportBlock(member, index, group, days, itemNames, periods, report
     const dutyHours = dutyHoursValue(rec);
     const diff = productTotal - quota;
     const completeDiff = productTotal - completeQuota;
-    const status = rec?.status || quotaStatusFromTotals(productTotal, quota, completeQuota);
+    const status = saturationForRange(member, [day], report).status;
     return { day, rec, items, raw: totals.raw, weighted: totals.weighted, productTotal, quota, completeQuota, workloadQuota, workloadDiff: totals.weighted - workloadQuota, dutyHours, diff, completeDiff, video: products.video, ai: products.ai, status };
   });
   const totalRaw = records.reduce((sum, row) => sum + row.raw, 0);
@@ -7322,7 +7352,7 @@ function mixedExportGroupTotals(days, members, itemNames, report) {
   result.diff = result.productTotal - result.quota;
   result.completeDiff = result.productTotal - result.completeQuota;
   result.workloadDiff = result.weighted - result.workloadQuota;
-  result.status = quotaStatusFromTotals(result.productTotal, result.quota, result.completeQuota);
+  result.status = saturationRows(members.map(member => ({ saturation: saturationForRange(member, days, report) }))).status;
   return result;
 }
 function mixedExportGroupDayTotals(day, members, itemNames, report) {
@@ -7341,7 +7371,7 @@ function mixedExportMemberDay(member, day, itemNames, report) {
   const diff = productTotal - quota;
   const completeDiff = productTotal - completeQuota;
   const workloadDiff = totals.weighted - workloadQuota;
-  const status = rec?.status || quotaStatusFromTotals(productTotal, quota, completeQuota);
+  const status = saturationForRange(member, [day], report).status;
   return { rec, items, raw: totals.raw, weighted: totals.weighted, productTotal, quota, completeQuota, workloadQuota, workloadDiff, dutyHours, diff, completeDiff, video: products.video, ai: products.ai, status, note: mixedExportRecordNote(rec) };
 }
 function mixedExportMemberTotalCells(member, days, itemNames, periods, report) {

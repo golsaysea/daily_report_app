@@ -17,6 +17,13 @@ test('missing rates and exhausted time remain explicit', () => {
   assert.equal(context.calculate({}, {}, 14, { cooking: 14 }).ratio, null);
   assert.equal(context.calculate({}, {}, 14, { cooking: 15 }).available, 0);
 });
+test('saturation grades use 50, 80 and 100 percent boundaries', () => {
+  for (const [amount, level, passed] of [[0,'low',false],[49.9,'low',false],[50,'danger',false],[79.9,'danger',false],[80,'near',false],[99.9,'near',false],[100,'qualified',true],[150,'qualified',true]]) {
+    const result = context.calculate({ item: amount }, { item: 100 }, 14);
+    assert.equal(result.level, level); assert.equal(result.passed, passed);
+  }
+  assert.equal(context.calculate({ unknown: 200 }, {}, 14).passed, false);
+});
 test('Worker retains daily snapshots and latest zero deductions', () => {
   const source = fs.readFileSync('cloudflare-worker.mjs', 'utf8');
   const worker = vm.createContext({});

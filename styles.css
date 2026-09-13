@@ -527,3 +527,15 @@ tr:last-child td { border-bottom: 0; }
 #saturationOverview { margin: 16px 0; padding: 12px; background: white; }
 #saturationOverview td { white-space: nowrap; font-variant-numeric: tabular-nums; }
 #entryTable th:nth-child(3), #entryTable th:nth-child(4), #entryTable td:nth-child(3), #entryTable td:nth-child(4) { display: none; }
+.metric:has(#dailyQuotaInput), .metric:has(#dailyCompleteQuotaInput), .form-grid:has(#quotaInput), .panel:has(> #memberQuotaBox) { display: none; }
+.overview-stat-card:has(#teamQuota), .overview-stat-card:has(#teamDiff), .overview-stat-card:has(#teamWorkloadQuota), .overview-stat-card:has(#teamWorkloadDiff) { display: none; }
+#statusSelect, label[for="statusSelect"] { display: none; }
+.saturation-grade { padding: 12px; border-radius: 6px; }
+.saturation-grade progress { display: block; width: 100%; height: 14px; margin-top: 8px; accent-color: var(--grade-color); }
+.saturation-low { background: #fce1e0 !important; color: #94231f; --grade-color: #c53630; }
+.saturation-danger { background: #fff0ad !important; color: #715000; --grade-color: #ba8500; }
+.saturation-near { background: #e0f1d4 !important; color: #456328; --grade-color: #87b761; }
+.saturation-qualified { background: #c0e7d0 !important; color: #145e37; --grade-color: #21884e; }
+.saturation-unknown { background: #eef0ef; color: #505956; --grade-color: #89938d; }
+.person-card .progress span { background: var(--grade-color, #89938d); }
+table:has(#mixedTableBody) tr > :nth-last-child(9), table:has(#mixedTableBody) tr > :nth-last-child(8), table:has(#mixedTableBody) tr > :nth-last-child(7), table:has(#mixedTableBody) tr > :nth-last-child(6), table:has(#mixedTableBody) tr > :nth-last-child(5), table:has(#mixedTableBody) tr > :nth-last-child(3) { display: none; }
