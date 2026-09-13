@@ -539,3 +539,6 @@ tr:last-child td { border-bottom: 0; }
 .saturation-unknown { background: #eef0ef; color: #505956; --grade-color: #89938d; }
 .person-card .progress span { background: var(--grade-color, #89938d); }
 table:has(#mixedTableBody) tr > :nth-last-child(9), table:has(#mixedTableBody) tr > :nth-last-child(8), table:has(#mixedTableBody) tr > :nth-last-child(7), table:has(#mixedTableBody) tr > :nth-last-child(6), table:has(#mixedTableBody) tr > :nth-last-child(5), table:has(#mixedTableBody) tr > :nth-last-child(3) { display: none; }
+.daily-product-quota { display: grid; grid-template-columns: auto minmax(120px, 200px); align-items: center; justify-content: start; gap: 12px; margin-bottom: 14px; font-weight: 600; }
+.daily-product-quota input { width: 100%; min-width: 0; }
+@media (max-width: 480px) { .daily-product-quota { grid-template-columns: minmax(0, 1fr); } }

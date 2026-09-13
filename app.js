@@ -28,6 +28,7 @@ const Saturation = (() => {
     return { status: '非常低', level: 'low', passed: false };
   }
   function productQuota(items, snapshot) {
+    if (snapshot?.dailyProductQuota !== null && snapshot?.dailyProductQuota !== undefined && Number.isFinite(Number(snapshot.dailyProductQuota))) return Math.ceil(Math.max(0, Number(snapshot.dailyProductQuota)) / 5) * 5;
     if (!snapshot?.productRules) return null;
     const result = calculate(items, snapshot.rules, snapshot.baseHours, snapshot.deductions);
     if (result.deducted > result.base) return null;
@@ -51,12 +52,19 @@ function saturationSettings() {
   return { ...settings, options: settings.optionsVersion === 2 ? settings.options : [...new Set([...(settings.options || Saturation.options), ...Saturation.extraOptions])] };
 }
 function saturationForRange(member, days, report = reportData()) {
-  const entries = days.map(day => report.records?.[`${day}|${member}`]).map(record => record?.saturation ? Saturation.calculate(record.items, record.saturation.rules, record.saturation.baseHours, record.saturation.deductions) : null);
+  const entries = days.map(day => report.records?.[`${day}|${member}`]).map(record => {
+    const standard = resolvedSaturation(record, report);
+    return standard ? Saturation.calculate(record.items, standard.rules, standard.baseHours, standard.deductions) : null;
+  });
   const total = entries.reduce((sum, entry) => sum + (entry?.total || 0), 0);
   const target = entries.reduce((sum, entry) => sum + (entry?.target || 0), 0);
   const valid = entries.length > 0 && entries.every(entry => entry && entry.level !== 'unknown');
   const ratio = valid && target > 0 ? total / target : null;
   return { total, target, ratio, ...Saturation.classify(ratio) };
+}
+function resolvedSaturation(record, report = reportData()) {
+  if (!record?.saturation) return null;
+  return { ...record.saturation, rules: { ...record.saturation.rules, ...report.totalConversionRules }, productRules: { ...record.saturation.productRules, ...report.productRules } };
 }
 function saturationRows(rows) {
   const total = rows.reduce((sum, row) => sum + (row.saturation?.total || 0), 0);
@@ -67,7 +75,7 @@ function saturationRows(rows) {
 function suggestedProductQuota(member, days, report = reportData()) {
   const values = days.map(day => {
     const record = report.records?.[`${day}|${member}`];
-    return Saturation.productQuota(record?.items || {}, record?.saturation);
+    return Saturation.productQuota(record?.items || {}, resolvedSaturation(record, report));
   });
   return values.length && values.every(value => value !== null) ? values.reduce((sum, value) => sum + value, 0) : null;
 }
@@ -86,12 +94,14 @@ function archiveLegacyWorkload() {
 function saturationRecordInput() {
   const deductions = { ...(currentRecord().saturation?.deductions || {}) };
   document.querySelectorAll('[data-saturation-time]').forEach(input => { deductions[input.dataset.saturationTime] = Number(input.value || 0); });
-  const previous = currentRecord().saturation;
+  const previous = resolvedSaturation(currentRecord(), data);
+  const input = document.getElementById('dailyProductQuota');
   return {
     baseHours: previous?.baseHours ?? saturationSettings().memberHours?.[currentMember] ?? 14,
     rules: previous?.rules || { ...data.totalConversionRules },
     productRules: previous?.productRules || clone(data.productRules || {}),
     productQuota: previous?.productRules ? previous.productQuota ?? null : saturationSettings().productQuotas?.[currentMember] ?? null,
+    dailyProductQuota: input ? (input.value === '' ? null : Math.ceil(Math.max(0, Number(input.value) || 0) / 5) * 5) : previous?.dailyProductQuota ?? null,
     deductions
   };
 }
@@ -106,6 +116,17 @@ function renderSaturationEntry(record) {
   const names = [...new Set([...(saturationSettings().options || Saturation.options), ...Object.keys(saved?.deductions || {})])];
   box.innerHTML = `<h3>每日工作饱和量</h3><div id="saturationSummary" role="status"></div><div class="saturation-times">${names.map(name => `<label>${escapeHtml(name)}<input type="number" min="0" max="24" step="0.25" data-saturation-time="${escapeAttr(name)}" value="${Number(saved?.deductions?.[name] || 0)}" aria-label="${escapeAttr(name)}（小时）"></label>`).join('')}</div><details><summary>换算明细</summary><div id="saturationDetails"></div></details>`;
   box.querySelectorAll('input').forEach(input => { input.oninput = () => { preview(); scheduleDraftSave(); }; });
+  const quotaLabel = document.createElement('label'); quotaLabel.className = 'daily-product-quota';
+  quotaLabel.textContent = '当天参考成品定额';
+  const quotaInput = document.createElement('input');
+  quotaInput.id = 'dailyProductQuota'; quotaInput.type = 'number'; quotaInput.min = '0'; quotaInput.step = '5';
+  quotaInput.placeholder = '留空自动估算'; quotaInput.value = saved?.dailyProductQuota ?? '';
+  quotaInput.oninput = () => { preview(); scheduleDraftSave(); };
+  quotaInput.onchange = () => {
+    if (quotaInput.value !== '') quotaInput.value = Math.ceil(Math.max(0, Number(quotaInput.value) || 0) / 5) * 5;
+    preview(); scheduleDraftSave();
+  };
+  quotaLabel.appendChild(quotaInput); box.prepend(quotaLabel);
   const refresh = document.createElement('button');
   refresh.type = 'button'; refresh.textContent = '按最新标准重算当天';
   refresh.onclick = () => {
@@ -132,7 +153,7 @@ function previewSaturation(items) {
     progress.max = 100; progress.value = Math.min(100, (result.ratio || 0) * 100);
     progress.setAttribute('aria-label', '工作饱和度进度'); box.appendChild(progress);
     const quota = document.createElement('div'); quota.id = 'suggestedProductQuota';
-    quota.textContent = `参考成品定额：${suggested === null ? '待估算' : suggested} · ${settings.productQuota == null ? '自动估算' : '管理员设置'}`;
+    quota.textContent = `参考成品定额：${suggested === null ? '待估算' : suggested} · ${settings.dailyProductQuota != null ? '当天自定' : settings.productQuota == null ? '自动估算' : '管理员设置'}`;
     box.appendChild(quota);
   }
   document.querySelectorAll('[data-saturation-time]').forEach(input => {
@@ -142,10 +163,17 @@ function previewSaturation(items) {
   });
   document.querySelectorAll('[data-saturation-item]').forEach(el => {
     const row = result.details.find(row => row.name === el.dataset.saturationItem);
-    el.textContent = row?.quota ? `工作饱和量 ${fmt(row.value)}` : '饱和日量未设置';
+    el.textContent = row?.quota ? `工作饱和量 ${fmt(row.value)} · 日量 ${fmt(row.quota)}` : '饱和日量未设置';
   });
   const details = document.getElementById('saturationDetails');
   if (details) details.textContent = result.details.filter(row => row.amount).map(row => `${row.name}：${row.amount} ÷ ${row.quota || '未设置'} = ${fmt(row.value)}；当日目标 ${fmt(row.adjusted)}`).join('；');
+  if (details) {
+    const explanation = document.createElement('p');
+    const parts = Object.entries(items).filter(([, amount]) => Number(amount) > 0).map(([name, amount]) => ({ name, amount: Number(amount), coefficient: Number(settings.productRules?.[name]?.video || 0) }));
+    const video = parts.reduce((sum, item) => sum + item.amount * item.coefficient, 0);
+    explanation.textContent = settings.dailyProductQuota != null ? `当天自定参考成品定额：${suggested}` : settings.productQuota != null ? `管理员整天参考日量 ${settings.productQuota} × 剩余时间 ${fmt(result.available)} / ${fmt(result.base)}，向上取5的倍数 = ${suggested ?? '待估算'}` : `视频成品：${parts.map(item => `${item.name} ${item.amount} × ${item.coefficient}`).join(' + ') || '无'} = ${fmt(video)}。参考成品定额：${fmt(video)} ÷ 已完成饱和量 ${fmt(result.total)} × 剩余时间 ${fmt(result.available)} / ${fmt(result.base)}，向上取5的倍数 = ${suggested ?? '待估算'}。`;
+    details.appendChild(explanation);
+  }
   return result;
 }
 function renderSaturationAdmin() {
@@ -194,7 +222,7 @@ function renderSaturationOverview() {
   const rows = [];
   for (const day of days) for (const member of members) {
     const record = report.records?.[`${day}|${member}`];
-    const saved = record?.saturation;
+    const saved = resolvedSaturation(record, report);
     const result = saved ? Saturation.calculate(record.items, saved.rules, saved.baseHours, saved.deductions) : null;
     rows.push([day, member, result ? fmt(result.available) : '—', result ? fmt(result.total) : '—', result ? fmt(result.target) : '—', result?.ratio != null ? fmt(result.ratio * 100) + '%' : '—', result?.status || '未结算']);
   }

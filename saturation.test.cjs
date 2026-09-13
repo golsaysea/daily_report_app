@@ -35,6 +35,18 @@ test('product suggestions use actual mix, five-unit rounding and manual daily ca
   assert.equal(context.productQuota({ a: 100 }, { ...snapshot, rules: { a: 201 }, deductions: {} }), 205);
   assert.equal(context.productQuota({ a: 1 }, { ...snapshot, deductions: { x: 12 } }), 0);
   assert.equal(context.productQuota({ unknown: 1 }, snapshot), null);
+  assert.equal(context.productQuota({ a: 100 }, { ...snapshot, dailyProductQuota: 203 }), 205);
+  assert.equal(context.productQuota({ a: 100 }, { ...snapshot, dailyProductQuota: 0 }), 0);
+  const mix = { baseHours: 14, deductions: {}, rules: { hook: 22, phrase: 140 }, productRules: { hook: { video: 1 }, phrase: { video: 1 } }, productQuota: null };
+  assert.equal(context.productQuota({ hook: 10, phrase: 80 }, mix), 90);
+  assert.equal(context.productQuota({ hook: 10, phrase: 80 }, { ...mix, deductions: { other: 10 } }), 30);
+});
+test('saved records use updated project day rates without mutating archived snapshots', () => {
+  const record = { saturation: { rules: { rolling: 50 }, baseHours: 12, deductions: { cooking: 2 }, dailyProductQuota: 205 }, items: { rolling: 48 } };
+  const resolved = context.resolvedSaturation(record, { totalConversionRules: { rolling: 100 } });
+  assert.equal(context.calculate(record.items, resolved.rules, resolved.baseHours, resolved.deductions).total, 0.48);
+  assert.equal(record.saturation.rules.rolling, 50);
+  assert.equal(resolved.dailyProductQuota, 205);
 });
 test('Worker retains daily snapshots and latest zero deductions', () => {
   const source = fs.readFileSync('cloudflare-worker.mjs', 'utf8');
