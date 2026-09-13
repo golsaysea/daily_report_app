@@ -1,6 +1,49 @@
 # 小组报数日记
 
-这是一个可以部署到 Vercel 的网页版本。推荐模式是本地优先保存 + Vercel 云数据库实时分发；管理员本地中心和 Google Drive 共享文件夹用于备用、导出、额度满时保底和二次汇总。
+这是一个可以部署到 Vercel 的网页版本。可使用 Cloudflare Worker + D1 同步，也保留 Vercel Postgres 通道。本机草稿、管理员本地中心和共享文件夹用于备份；以页面显示的实际云同步状态判断是否写入成功。
+
+## 已复制项目如何更新
+
+上游仓库：[secure-artifacts/daily_report_app](https://github.com/secure-artifacts/daily_report_app)。修改 README 不会自动更新其他仓库，更新代码和部署是两个步骤。
+
+### GitHub Fork 的项目
+
+1. 打开自己的 GitHub 仓库，确认仓库名下有 `forked from secure-artifacts/daily_report_app`。
+2. 在需要更新的分支点击 **Sync fork → Update branch**。如果提示冲突，先合并处理，不要选择丢弃自己的修改。
+3. 到 Vercel 对应项目检查连接的仓库及生产分支是否正是这个仓库和分支。
+4. 在 Deployments 检查新提交是否成功部署。重新部署旧提交并不会获得新代码。
+5. 若本次修改了 `cloudflare-worker.mjs`，还要更新该项目自己的 Worker，见下面说明。
+
+参考：[GitHub 同步 Fork](https://docs.github.com/en/pull-requests/how-tos/work-with-forks/syncing-a-fork)、[Vercel Git 部署](https://vercel.com/docs/git)。部署失败时查看具体错误，包括 GitHub 仓库访问权限、提交者权限和构建日志。
+
+### 下载、模板或手动复制的独立仓库
+
+这类仓库通常没有 Sync fork 按钮，需要更新自己的代码副本：
+
+1. 从上游同一次提交下载完整源代码。GitHub 的 **Code → Download ZIP** 对应当前分支；Releases 附件对应标签版本，可能比 main 旧。
+2. 在自己的仓库更新 `index.html`、`app.js`、`styles.css`、整个 `api/` 目录、`package.json`、`package-lock.json`、`vercel.json`。同时更新 `cloudflare-worker.mjs`；本地运行还需 `server.cjs`、`run_web_app.bat`。
+3. 保留自己的定制代码并检查差异；不要用下载包覆盖 `data/`、`report_data.json`、备份、`.env*` 或已填写的 `wrangler.toml`。这些不是通用程序更新文件。
+4. 将代码提交到 Vercel 所连接的生产分支，确认新部署成功后刷新网页。
+
+不要只复制一个 `app.js` 或一段代码。网页、样式和 API 应来自同一版本。每日饱和统计已合入 `app.js`，不需要单独部署 `saturation.js`。
+
+### Cloudflare Worker 单独更新
+
+如果 Worker 是在 Cloudflare 控制台手动建立的，GitHub/Vercel 更新不会自动更新它。
+
+1. 找到该网页实际使用的 Worker。以该 Vercel 项目的 `CLOUD_SYNC_ENDPOINT` 和管理员备用地址为准。
+2. 用同版本的 `cloudflare-worker.mjs` 更新 Worker 代码并部署；保留现有 `DB` 绑定和 Secret。
+3. 不要新建或清空 D1，也不要更换 `CLOUD_SYNC_ENCRYPTION_KEY` 来尝试修复连接。已有加密数据需要原密钥。
+4. 刷新网页，验证真实读取和提交。健康检查返回 `configured: true` 只说明配置存在，不代表完整读写已成功。
+
+多个独立团队应使用各自的 Worker、D1 和密码；需要共享同一份数据的网页才连接同一套后端。每个 Vercel 项目的环境变量分别配置，复制 GitHub 代码不会复制平台环境变量。
+
+### 最近更新核对
+
+- `4e4a59f`：每日工作饱和统计，网页与 Worker 都需更新。
+- `c5b17f4`：修复 `renderSaturationEntry is not defined`，统计模块合入主脚本；此修复只涉及网页。
+- 每日饱和量为各项目数量除以各自日量后相加；目标为 `(个人基准小时 - 杂项小时) / 个人基准小时`。默认14小时，个人基准、项目日量与杂项选项可在管理员设置。
+- 每日记录保留当时的结算标准；修改设置后如需重算某天，打开当天并点击“按最新标准重算当天”。旧记录未保存标准时显示“未结算”。
 
 ## 数据同步方式
 
