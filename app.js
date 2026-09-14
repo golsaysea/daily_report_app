@@ -111,8 +111,9 @@ function saturationRecordInput() {
   document.querySelectorAll('[data-saturation-time]').forEach(input => { deductions[input.dataset.saturationTime] = Number(input.value || 0); });
   const previous = resolvedSaturation(currentRecord(), data);
   const input = document.getElementById('dailyProductQuota');
+  const hoursInput = document.getElementById('dailyBaseHours');
   return {
-    baseHours: previous?.baseHours ?? personalStandards(currentMember).hours,
+    baseHours: hoursInput?.value !== '' && hoursInput?.checkValidity() ? Number(hoursInput.value) : previous?.baseHours ?? personalStandards(currentMember).hours,
     rules: previous?.rules || { ...data.totalConversionRules },
     productRules: previous?.productRules || clone(data.productRules || {}),
     productQuota: previous?.productRules ? previous.productQuota ?? null : personalStandards(currentMember).quota,
@@ -142,9 +143,26 @@ function renderSaturationEntry(record) {
     if (quotaInput.value !== '') quotaInput.value = Math.ceil(Math.max(0, Number(quotaInput.value) || 0) / 5) * 5;
     preview(); scheduleDraftSave();
   };
-  quotaLabel.appendChild(quotaInput); box.prepend(quotaLabel);
+  quotaLabel.appendChild(quotaInput);
+  const dailyControls = document.createElement('div'); dailyControls.className = 'day-target-controls';
+  const hoursLabel = document.createElement('label'); hoursLabel.className = 'daily-product-quota';
+  hoursLabel.textContent = '当天基准工作时间（小时）';
+  const dailyHours = document.createElement('input');
+  dailyHours.id = 'dailyBaseHours'; dailyHours.type = 'number'; dailyHours.min = '0.25'; dailyHours.max = '24'; dailyHours.step = '0.25';
+  dailyHours.value = saved?.baseHours ?? personalStandards(currentMember).hours;
+  dailyHours.oninput = () => {
+    preview();
+    if (dailyHours.value !== '' && dailyHours.checkValidity()) scheduleDraftSave();
+  };
+  dailyHours.onchange = () => {
+    if (dailyHours.value === '') dailyHours.value = personalStandards(currentMember).hours;
+    if (!dailyHours.reportValidity()) return;
+    preview(); scheduleDraftSave();
+  };
+  hoursLabel.appendChild(dailyHours); dailyControls.append(quotaLabel, hoursLabel); box.prepend(dailyControls);
   const own = personalDefaultValues(currentMember);
   const defaults = document.createElement('details'); defaults.className = 'personal-defaults';
+  defaults.open = true;
   defaults.innerHTML = `<summary>个人默认设置</summary><div class="saturation-times"><label>默认参考成品日量<input id="personalDefaultQuota" type="number" step="5" min="0" placeholder="留空跟随管理员" value="${own?.quota ?? ''}"></label><label>默认基准时间（小时）<input id="personalDefaultHours" type="number" step="0.25" min="0.25" max="24" placeholder="${personalStandards(currentMember).hours}" value="${own?.hours ?? ''}"></label></div><button type="button" id="savePersonalDefaults">保存个人默认值</button><span id="personalDefaultsHint" role="status"></span>`;
   box.prepend(defaults);
   defaults.querySelector('button').onclick = () => {
@@ -162,6 +180,7 @@ function renderSaturationEntry(record) {
     const rec = currentRecord(); rec.saturation.personalDefaults = value; rec.updated_at = value.updated_at;
     if (!hadStandard) {
       rec.saturation.baseHours = personalStandards(currentMember).hours;
+      dailyHours.value = rec.saturation.baseHours;
       rec.saturation.productQuota = personalStandards(currentMember).quota;
     }
     quotaInput.value = value.quota ?? '';
@@ -175,6 +194,7 @@ function renderSaturationEntry(record) {
     saveFormSilently();
     const saved = saturationRecordInput();
     currentRecord().saturation = { ...saved, baseHours: personalStandards(currentMember).hours, rules: { ...data.totalConversionRules } };
+    dailyHours.value = currentRecord().saturation.baseHours;
     currentRecord().saturation.productRules = clone(data.productRules || {});
     currentRecord().saturation.productQuota = personalStandards(currentMember).quota;
     currentRecord().updated_at = new Date().toISOString();

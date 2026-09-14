@@ -545,3 +545,6 @@ table:has(#mixedTableBody) tr > :nth-last-child(9), table:has(#mixedTableBody) t
 .personal-defaults { padding: 12px 0; margin-bottom: 12px; border-bottom: 1px solid #d7dfd9; }
 .personal-defaults summary { cursor: pointer; font-weight: 600; }
 #personalDefaultsHint { display: block; margin-top: 8px; font-size: 12px; line-height: 1.6; }
+.day-target-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.day-target-controls .daily-product-quota { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+@media (max-width: 480px) { .day-target-controls { grid-template-columns: minmax(0, 1fr); } }
