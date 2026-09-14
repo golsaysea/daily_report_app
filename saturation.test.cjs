@@ -48,6 +48,17 @@ test('saved records use updated project day rates without mutating archived snap
   assert.equal(record.saturation.rules.rolling, 50);
   assert.equal(resolved.dailyProductQuota, 205);
 });
+test('personal defaults use latest member setting and keep members separate', () => {
+  const report = { records: {
+    a: { member: 'A', saturation: { personalDefaults: { hours: 12, quota: 200, updated_at: '2026-09-12T12:00:00Z' } } },
+    b: { member: 'A', saturation: { personalDefaults: { hours: 10, quota: 205, updated_at: '2026-09-14T12:00:00Z' } } },
+    c: { member: 'B', saturation: { personalDefaults: { hours: 8, quota: 100, updated_at: '2026-09-15T12:00:00Z' } } }
+  } };
+  assert.equal(context.personalDefaultValues('A', report).hours, 10);
+  assert.equal(context.personalDefaultValues('A', report).quota, 205);
+  assert.equal(context.personalDefaultValues('B', report).quota, 100);
+  assert.equal(context.personalDefaultValues('C', report), null);
+});
 test('Worker retains daily snapshots and latest zero deductions', () => {
   const source = fs.readFileSync('cloudflare-worker.mjs', 'utf8');
   const worker = vm.createContext({});

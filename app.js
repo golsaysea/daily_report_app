@@ -51,6 +51,21 @@ function saturationSettings() {
   const settings = data.saturationSettings || { memberHours: {}, options: Saturation.options };
   return { ...settings, options: settings.optionsVersion === 2 ? settings.options : [...new Set([...(settings.options || Saturation.options), ...Saturation.extraOptions])] };
 }
+function personalDefaultValues(member, report = data) {
+  let latest = null;
+  for (const record of Object.values(report.records || {})) {
+    const value = record?.saturation?.personalDefaults;
+    if (record?.member === member && value && (!latest || String(value.updated_at) > String(latest.updated_at))) latest = value;
+  }
+  return latest;
+}
+function personalStandards(member) {
+  const own = personalDefaultValues(member);
+  return {
+    hours: own?.hours ?? saturationSettings().memberHours?.[member] ?? 14,
+    quota: own?.quota ?? saturationSettings().productQuotas?.[member] ?? null
+  };
+}
 function saturationForRange(member, days, report = reportData()) {
   const entries = days.map(day => report.records?.[`${day}|${member}`]).map(record => {
     const standard = resolvedSaturation(record, report);
@@ -97,10 +112,11 @@ function saturationRecordInput() {
   const previous = resolvedSaturation(currentRecord(), data);
   const input = document.getElementById('dailyProductQuota');
   return {
-    baseHours: previous?.baseHours ?? saturationSettings().memberHours?.[currentMember] ?? 14,
+    baseHours: previous?.baseHours ?? personalStandards(currentMember).hours,
     rules: previous?.rules || { ...data.totalConversionRules },
     productRules: previous?.productRules || clone(data.productRules || {}),
-    productQuota: previous?.productRules ? previous.productQuota ?? null : saturationSettings().productQuotas?.[currentMember] ?? null,
+    productQuota: previous?.productRules ? previous.productQuota ?? null : personalStandards(currentMember).quota,
+    personalDefaults: previous?.personalDefaults,
     dailyProductQuota: input ? (input.value === '' ? null : Math.ceil(Math.max(0, Number(input.value) || 0) / 5) * 5) : previous?.dailyProductQuota ?? null,
     deductions
   };
@@ -127,14 +143,40 @@ function renderSaturationEntry(record) {
     preview(); scheduleDraftSave();
   };
   quotaLabel.appendChild(quotaInput); box.prepend(quotaLabel);
+  const own = personalDefaultValues(currentMember);
+  const defaults = document.createElement('details'); defaults.className = 'personal-defaults';
+  defaults.innerHTML = `<summary>个人默认设置</summary><div class="saturation-times"><label>默认参考成品日量<input id="personalDefaultQuota" type="number" step="5" min="0" placeholder="留空跟随管理员" value="${own?.quota ?? ''}"></label><label>默认基准时间（小时）<input id="personalDefaultHours" type="number" step="0.25" min="0.25" max="24" placeholder="${personalStandards(currentMember).hours}" value="${own?.hours ?? ''}"></label></div><button type="button" id="savePersonalDefaults">保存个人默认值</button><span id="personalDefaultsHint" role="status"></span>`;
+  box.prepend(defaults);
+  defaults.querySelector('button').onclick = () => {
+    const hoursInput = defaults.querySelector('#personalDefaultHours'), quotaInput = defaults.querySelector('#personalDefaultQuota');
+    if (!hoursInput.checkValidity() || !quotaInput.checkValidity() && quotaInput.validity.rangeUnderflow) {
+      defaults.querySelector('#personalDefaultsHint').textContent = '时间需在0.25至24小时之间，定额不能为负数'; return;
+    }
+    const hadStandard = Boolean(currentRecord().saturation);
+    saveFormSilently();
+    const value = {
+      hours: hoursInput.value === '' ? null : Number(hoursInput.value),
+      quota: quotaInput.value === '' ? null : Math.ceil(Number(quotaInput.value) / 5) * 5,
+      updated_at: new Date().toISOString()
+    };
+    const rec = currentRecord(); rec.saturation.personalDefaults = value; rec.updated_at = value.updated_at;
+    if (!hadStandard) {
+      rec.saturation.baseHours = personalStandards(currentMember).hours;
+      rec.saturation.productQuota = personalStandards(currentMember).quota;
+    }
+    quotaInput.value = value.quota ?? '';
+    markPendingCloudRecord(currentDate, currentMember); persistLocal(); scheduleRecordCloudSave();
+    preview();
+    defaults.querySelector('#personalDefaultsHint').textContent = '默认值已保存到本机并排队同步；新日期使用，当前日期可点击重算';
+  };
   const refresh = document.createElement('button');
   refresh.type = 'button'; refresh.textContent = '按最新标准重算当天';
   refresh.onclick = () => {
     saveFormSilently();
     const saved = saturationRecordInput();
-    currentRecord().saturation = { ...saved, baseHours: saturationSettings().memberHours?.[currentMember] ?? 14, rules: { ...data.totalConversionRules } };
+    currentRecord().saturation = { ...saved, baseHours: personalStandards(currentMember).hours, rules: { ...data.totalConversionRules } };
     currentRecord().saturation.productRules = clone(data.productRules || {});
-    currentRecord().saturation.productQuota = saturationSettings().productQuotas?.[currentMember] ?? null;
+    currentRecord().saturation.productQuota = personalStandards(currentMember).quota;
     currentRecord().updated_at = new Date().toISOString();
     markPendingCloudRecord(currentDate, currentMember);
     persistLocal(); scheduleRecordCloudSave(); preview();
@@ -153,7 +195,7 @@ function previewSaturation(items) {
     progress.max = 100; progress.value = Math.min(100, (result.ratio || 0) * 100);
     progress.setAttribute('aria-label', '工作饱和度进度'); box.appendChild(progress);
     const quota = document.createElement('div'); quota.id = 'suggestedProductQuota';
-    quota.textContent = `参考成品定额：${suggested === null ? '待估算' : suggested} · ${settings.dailyProductQuota != null ? '当天自定' : settings.productQuota == null ? '自动估算' : '管理员设置'}`;
+    quota.textContent = `参考成品定额：${suggested === null ? '待估算' : suggested} · ${settings.dailyProductQuota != null ? '当天自定' : settings.productQuota == null ? '自动估算' : '默认参考日量'}`;
     box.appendChild(quota);
   }
   document.querySelectorAll('[data-saturation-time]').forEach(input => {

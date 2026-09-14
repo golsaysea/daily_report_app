@@ -542,3 +542,6 @@ table:has(#mixedTableBody) tr > :nth-last-child(9), table:has(#mixedTableBody) t
 .daily-product-quota { display: grid; grid-template-columns: auto minmax(120px, 200px); align-items: center; justify-content: start; gap: 12px; margin-bottom: 14px; font-weight: 600; }
 .daily-product-quota input { width: 100%; min-width: 0; }
 @media (max-width: 480px) { .daily-product-quota { grid-template-columns: minmax(0, 1fr); } }
+.personal-defaults { padding: 12px 0; margin-bottom: 12px; border-bottom: 1px solid #d7dfd9; }
+.personal-defaults summary { cursor: pointer; font-weight: 600; }
+#personalDefaultsHint { display: block; margin-top: 8px; font-size: 12px; line-height: 1.6; }
