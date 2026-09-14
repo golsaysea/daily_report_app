@@ -59,6 +59,22 @@ test('personal defaults use latest member setting and keep members separate', ()
   assert.equal(context.personalDefaultValues('B', report).quota, 100);
   assert.equal(context.personalDefaultValues('C', report), null);
 });
+test('overview quotas inherit defaults without records and preserve daily overrides', () => {
+  const report = { saturationSettings: { productQuotas: { A: 100, B: 50 } }, records: {
+    '2026-09-12|A': { member: 'A', saturation: { personalDefaults: { quota: 200, updated_at: '2026-09-12' } } },
+    '2026-09-14|A': { member: 'A', saturation: { dailyProductQuota: 205 } },
+    '2026-09-15|A': { member: 'A', saturation: { dailyProductQuota: 0 } }
+  } };
+  const before = JSON.stringify(report);
+  assert.equal(context.suggestedProductQuota('A', ['2026-09-13'], report), 200);
+  assert.equal(context.suggestedProductQuota('A', ['2026-09-14'], report), 205);
+  assert.equal(context.suggestedProductQuota('A', ['2026-09-15'], report), 0);
+  assert.equal(context.suggestedProductQuota('A', ['2026-09-13', '2026-09-14'], report), 405);
+  assert.equal(context.suggestedProductQuota('B', ['2026-09-13'], report), 50);
+  assert.equal(context.suggestedProductQuota('C', ['2026-09-13'], report), null);
+  assert.equal(JSON.stringify(report), before);
+});
+
 test('Worker retains daily snapshots and latest zero deductions', () => {
   const source = fs.readFileSync('cloudflare-worker.mjs', 'utf8');
   const worker = vm.createContext({});

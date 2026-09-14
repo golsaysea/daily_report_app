@@ -59,11 +59,11 @@ function personalDefaultValues(member, report = data) {
   }
   return latest;
 }
-function personalStandards(member) {
-  const own = personalDefaultValues(member);
+function personalStandards(member, report = data) {
+  const own = personalDefaultValues(member, report);
   return {
-    hours: own?.hours ?? saturationSettings().memberHours?.[member] ?? 14,
-    quota: own?.quota ?? saturationSettings().productQuotas?.[member] ?? null
+    hours: own?.hours ?? report.saturationSettings?.memberHours?.[member] ?? 14,
+    quota: own?.quota ?? report.saturationSettings?.productQuotas?.[member] ?? null
   };
 }
 function saturationForRange(member, days, report = reportData()) {
@@ -90,7 +90,10 @@ function saturationRows(rows) {
 function suggestedProductQuota(member, days, report = reportData()) {
   const values = days.map(day => {
     const record = report.records?.[`${day}|${member}`];
-    return Saturation.productQuota(record?.items || {}, resolvedSaturation(record, report));
+    const snapshot = resolvedSaturation(record, report);
+    const fixed = snapshot?.dailyProductQuota ?? personalStandards(member, report).quota ?? snapshot?.productQuota;
+    if (fixed != null && Number.isFinite(Number(fixed))) return Math.ceil(Math.max(0, Number(fixed)) / 5) * 5;
+    return Saturation.productQuota(record?.items || {}, snapshot);
   });
   return values.length && values.every(value => value !== null) ? values.reduce((sum, value) => sum + value, 0) : null;
 }
@@ -2657,7 +2660,7 @@ function summarizeOverviewRows(rows = []) {
     completeDiff: productTotal - completeQuota,
     saturation: saturationRows(rows),
     suggestedProductQuota: sumSuggestedQuotas(rows),
-    status: saturationRows(rows).status
+    status: overviewBriefStatus(productTotal, sumSuggestedQuotas(rows))
   };
 }
 function overviewSubgroupBriefLines(rows = []) {
@@ -4215,8 +4218,10 @@ function aggregateMemberRange(member, days, report, itemNames) {
   const totalConversion = totalConversionForItems(items, itemNames, report).total;
   const productTotal = productTotalValue(products);
   const saturation = saturationForRange(member, days, report);
-  const status = saturation.status;
-  const rate = Math.min(100, Math.round((saturation.ratio || 0) * 100));
+  quota = suggestedProductQuota(member, days, report);
+  completeQuota = quota;
+  const status = overviewBriefStatus(productTotal, quota);
+  const rate = quota > 0 ? Math.min(100, Math.round(productTotal / quota * 100)) : status === '达标' ? 100 : 0;
   return {
     member,
     subgroup: memberSubgroup(member, report),
@@ -4242,8 +4247,8 @@ function aggregateMemberRange(member, days, report, itemNames) {
     saturation,
     status,
     suggestedProductQuota: suggestedProductQuota(member, days, report),
-    passed: saturation.passed,
-    completePassed: saturation.passed,
+    passed: status === '达标',
+    completePassed: status === '达标',
     rate,
     checkinCount,
     checkinSlots,
@@ -4448,23 +4453,24 @@ function overviewBriefProductValue(source = {}) {
   return Number(source.video ?? source.productTotal ?? 0);
 }
 function overviewBriefStatus(productTotal, quota) {
-  return '未结算';
+  if (quota == null || !Number.isFinite(Number(quota))) return '未设置定额';
+  return Number(productTotal || 0) + 1e-9 >= Number(quota) ? '达标' : '未达标';
 }
 function overviewBriefDiffText(productTotal, quota) {
+  if (quota == null) return '未设置定额';
   const diff = cleanTotalValue(Number(productTotal || 0) - Number(quota || 0));
-  if (diff < 0) return fmt(Math.abs(diff));
+  if (diff < 0) return fmt(diff);
   return diff > 0 ? `+${fmt(diff)}` : "0";
 }
 function overviewGroupBriefLine(row, itemNames) {
   const product = overviewBriefProductValue(row);
-  const status = row.saturation?.status || '未结算';
+  const status = overviewBriefStatus(product, row.suggestedProductQuota);
   const note = String(row.note || "").trim();
   const parts = [
     `${row.member}：${status}`,
-    `参考成品定额 ${row.suggestedProductQuota == null ? '待估算' : row.suggestedProductQuota}`,
-    `饱和度 ${row.saturation?.ratio == null ? '未结算' : fmt(row.saturation.ratio * 100) + '%'}`,
+    `定额 ${row.suggestedProductQuota ?? '未设置'}`,
     `成品量 ${fmt(product)}`,
-    `判定 ${row.saturation?.ratio == null ? '未结算' : row.saturation.passed ? '达标' : '未达标'}`,
+    `差额 ${overviewBriefDiffText(product, row.suggestedProductQuota)}`,
     `项目 ${overviewGroupBriefItemDetail(row, itemNames)}`,
     note ? `备注 ${note}` : ""
   ].filter(Boolean);
@@ -4472,12 +4478,11 @@ function overviewGroupBriefLine(row, itemNames) {
 }
 function overviewGroupBriefReasonText(row, itemNames) {
   const product = overviewBriefProductValue(row);
-  const status = row.saturation?.status || '未结算';
+  const status = overviewBriefStatus(product, row.suggestedProductQuota);
   const note = String(row.note || "").trim();
   const lines = [
     `${row.member}：${status}`,
-    `   参考成品定额：${row.suggestedProductQuota == null ? '待估算' : row.suggestedProductQuota}`,
-    `   饱和度：${row.saturation?.ratio == null ? '未结算' : fmt(row.saturation.ratio * 100) + '%'}｜成品量：${fmt(product)}｜${row.saturation?.ratio == null ? '未结算' : row.saturation.passed ? '达标' : '未达标'}`,
+    `   定额：${row.suggestedProductQuota ?? '未设置'}｜成品量：${fmt(product)}｜差额：${overviewBriefDiffText(product, row.suggestedProductQuota)}`,
     `   项目明细：${overviewGroupBriefItemDetail(row, itemNames)}`
   ];
   if (note) lines.push(`   备注：${note}`);
@@ -4496,10 +4501,9 @@ function buildOverviewGroupBriefTextForRange(group, range, label, report = repor
   return [
     `${group} ${label}报数`,
     `时间：${rangeText(range)}`,
-    `参考成品定额：${summary.suggestedProductQuota == null ? '待估算' : summary.suggestedProductQuota}`,
-    `饱和度：${summary.saturation.ratio == null ? '未结算' : fmt(summary.saturation.ratio * 100) + '%'}`,
+    `定额：${summary.suggestedProductQuota ?? '未设置'}`,
     `成品量：${fmt(product)}`,
-    `判定：${summary.saturation.ratio == null ? '未结算' : summary.saturation.passed ? '达标' : '未达标'}`,
+    `差额：${overviewBriefDiffText(product, summary.suggestedProductQuota)}`,
     `状态：${status}`,
     "成员达标与项目明细：",
     ...detailLines
@@ -4531,9 +4535,9 @@ function overviewGroupBriefRows(group, report = reportData()) {
     [
       styledCell(group, "sDate"),
       styledCell(rangeText(range), "sItem"),
-      styledCell(summary.quota, "sQuota"),
+      styledCell(summary.suggestedProductQuota ?? '未设置', "sQuota"),
       styledCell(product, "sTotal"),
-      styledCell(overviewBriefDiffText(product, summary.quota), status === "达标" ? "sDiffGood" : "sDiffBad"),
+      styledCell(overviewBriefDiffText(product, summary.suggestedProductQuota), status === "达标" ? "sDiffGood" : "sDiffBad"),
       styledCell(status, mixedExportStatusStyle(status)),
       styledCell(reasonLines.join("\n"), "sNote")
     ]
@@ -4587,10 +4591,9 @@ function overviewRowsBriefText(title, range, label, rows, itemNames, sourceLabel
   return [
     `${title} ${label}报数`,
     `时间：${rangeText(range)}`,
-    `参考成品定额：${summary.suggestedProductQuota == null ? '待估算' : summary.suggestedProductQuota}`,
-    `饱和度：${summary.saturation.ratio == null ? '未结算' : fmt(summary.saturation.ratio * 100) + '%'}`,
+    `定额：${summary.suggestedProductQuota ?? '未设置'}`,
     `成品量：${fmt(product)}`,
-    `判定：${summary.saturation.ratio == null ? '未结算' : summary.saturation.passed ? '达标' : '未达标'}`,
+    `差额：${overviewBriefDiffText(product, summary.suggestedProductQuota)}`,
     `状态：${status}`,
     "成员达标与项目明细：",
     ...detailLines
@@ -4605,13 +4608,13 @@ function overviewRowsBriefRows(title, range, rows, itemNames, sourceLabel = "") 
     : ["暂无成员数据。"];
   return [
     [styledCell(`${title}｜${rangeText(range)}`, "sTitle", { mergeAcross: 6 })],
-    ["对象", "范围", "饱和度", "成品量", "判定", "等级", "成员达标与项目明细"].map((header) => styledCell(header, "sHeader")),
+    ["对象", "范围", "定额", "成品量", "差额", "状态", "成员达标与项目明细"].map((header) => styledCell(header, "sHeader")),
     [
       styledCell(title, "sDate"),
       styledCell(rangeText(range), "sItem"),
-      styledCell(summary.saturation.ratio == null ? '未结算' : fmt(summary.saturation.ratio * 100) + '%', "sTotal"),
+      styledCell(summary.suggestedProductQuota ?? '未设置', "sQuota"),
       styledCell(product, "sTotal"),
-      styledCell(summary.saturation.ratio == null ? '未结算' : summary.saturation.passed ? '达标' : '未达标', summary.saturation.passed ? "sDiffGood" : "sDiffBad"),
+      styledCell(overviewBriefDiffText(product, summary.suggestedProductQuota), status === '达标' ? "sDiffGood" : "sDiffBad"),
       styledCell(status, mixedExportStatusStyle(status)),
       styledCell(reasonLines.join("\n"), "sNote")
     ]
@@ -4813,7 +4816,7 @@ function renderOverview() {
   const totalProduct = rows.reduce((sum, row) => sum + Number(row.productTotal || 0), 0);
   const totalQuota = rows.reduce((sum, row) => sum + row.quota, 0);
   const totalCompleteQuota = rows.reduce((sum, row) => sum + row.completeQuota, 0);
-  const teamStatus = saturationRows(rows).status;
+  const teamStatus = summarizeOverviewRows(rows).status;
   const teamPassed = teamStatus !== "不达标";
   const itemTotals = itemNames.reduce((totals, name) => {
     totals[name] = rows.reduce((sum, row) => sum + Number(row.items[name] || 0), 0);
@@ -4838,9 +4841,9 @@ function renderOverview() {
       </div>
       <div class="subgroup-pill">自由编队 ${escapeHtml(row.subgroup || "未分队")}</div>
       <div class="progress" title="${row.rate}%"><span style="--w:${row.rate}%"></span></div>
-      <div class="hint">成品量 ${fmt(row.productTotal || 0)} · 饱和度 ${row.saturation.ratio == null ? '未结算' : fmt(row.saturation.ratio * 100) + '%'}</div>
-      <div class="hint">参考成品定额 ${row.suggestedProductQuota == null ? '待估算' : row.suggestedProductQuota}</div>
-      <div class="hint">${row.saturation.status} · ${row.saturation.ratio == null ? '未结算' : row.saturation.passed ? '达标' : '未达标'}</div>
+      <div class="hint">成品量 ${fmt(row.productTotal || 0)} · 定额 ${row.suggestedProductQuota ?? '未设置'}</div>
+      <div class="hint">成品${row.status} · 差额 ${overviewBriefDiffText(row.productTotal, row.suggestedProductQuota)}</div>
+      <div class="hint">辅助饱和度 ${row.saturation.ratio == null ? '未结算' : fmt(row.saturation.ratio * 100) + '%'}</div>
       <div class="hint">尽本分 ${fmtDutyHours(row.dutyHours || 0)}</div>
       <div class="hint">打卡 ${row.checkinCount}/${row.checkinSlots}</div>
       <div class="hint">${escapeHtml(row.note || "暂无备注")}</div>
@@ -4853,7 +4856,7 @@ function renderOverview() {
       <details class="overview-group" open>
         <summary>
           <span>${escapeHtml(group)} · ${groupRows.length} 人</span>
-          <strong>成品 ${fmt(groupSummary.productTotal)}<small> · ${groupSummary.status} · 饱和度 ${groupSummary.saturation.ratio == null ? '未结算' : fmt(groupSummary.saturation.ratio * 100) + '%'}</small></strong>
+          <strong>成品 ${fmt(groupSummary.productTotal)} / 定额 ${groupSummary.suggestedProductQuota ?? '未设置'}<small> · ${groupSummary.status}</small></strong>
           <span class="overview-export-actions">
             <button class="overview-export-btn" type="button" data-overview-export-group="${escapeAttr(group)}">表格</button>
             <button class="overview-export-btn" type="button" data-overview-export-text-group="${escapeAttr(group)}">TXT</button>
@@ -4879,7 +4882,7 @@ function renderOverview() {
               <details class="overview-subgroup" open>
                 <summary>
                   <span>${escapeHtml(name)} · ${subgroupRows.length} 人<small> · 来自 ${escapeHtml(sourceGroups)}</small></span>
-                  <strong>${fmt(subgroupSummary.productTotal)} / ${fmt(subgroupSummary.quota)} / ${fmt(subgroupSummary.completeQuota)}<small> · ${subgroupSummary.status} · 换算 ${fmt(subgroupSummary.weighted)} / 工作量定额 ${fmt(subgroupSummary.workloadQuota)}</small></strong>
+                  <strong>成品 ${fmt(subgroupSummary.productTotal)} / 定额 ${subgroupSummary.suggestedProductQuota ?? '未设置'}<small> · ${subgroupSummary.status}</small></strong>
                   <span class="overview-export-actions">
                     <button class="overview-export-btn" type="button" data-overview-export-subgroup="${escapeAttr(name)}">表格</button>
                     <button class="overview-export-btn" type="button" data-overview-export-text-subgroup="${escapeAttr(name)}">TXT</button>
@@ -7009,21 +7012,20 @@ function buildMixedSummaryText() {
       });
     });
     const totalProduct = productTotalValue({ video: totalVideoProduct, ai: totalAiProduct });
+    totalQuota = suggestedProductQuota(member, days, report);
     const diff = totalProduct - totalQuota;
     const saturation = saturationForRange(member, days, report);
-    const status = saturation.status;
+    const status = overviewBriefStatus(totalProduct, totalQuota);
     const detail = Object.entries(itemTotals)
       .filter(([, amount]) => cleanTotalValue(amount) !== 0)
       .map(([name, amount]) => `${name}：${fmtTotal(amount)}`)
       .join('，') || '暂无项目明细';
     return [
       `视频成品：${fmtTotal(totalProduct)}`,
-      `参考成品定额：${suggestedProductQuota(member, days, report) ?? '待估算'}`,
-      `饱和度：${saturation.ratio == null ? '未结算' : fmt(saturation.ratio * 100) + '%'}`,
-      `判定：${saturation.ratio == null ? '未结算' : saturation.passed ? '达标' : '未达标'}`,
+      `定额：${totalQuota ?? '未设置'}`,
+      `差额：${overviewBriefDiffText(totalProduct, totalQuota)}`,
       `状态：${status}`,
       `辅助AI成品：${fmtTotal(totalAiProduct)}`,
-      `总数换算量：${fmtTotalConversion(totalConversion)}天`,
       `项目明细：${detail}`
     ].join('\n');
   });
