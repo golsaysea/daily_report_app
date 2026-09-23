@@ -6136,6 +6136,53 @@ async function syncTodayToMixedTable(event) {
     showDialog("已同步到混合表格", "今日面板已先写入本机记录并刷新混合表格；云端暂时没写成功，请看同步状态。", "");
   }
 }
+function calculateWorkDays(rows) {
+  const details = rows.map(row => {
+    const quantity = Number(row.quantity), daily = Number(row.daily);
+    const valid = String(row.name).trim() && String(row.quantity).trim() !== '' && String(row.daily).trim() !== '' && Number.isFinite(quantity) && quantity >= 0 && Number.isFinite(daily) && daily > 0;
+    const days = valid ? quantity / daily : null;
+    return { ...row, name: String(row.name).trim(), days: Number.isFinite(days) ? days : null };
+  });
+  const total = details.reduce((sum, row) => sum + (row.days ?? 0), 0);
+  return { details, total, valid: Number.isFinite(total) && details.length > 0 && details.every(row => row.days !== null) };
+}
+function workDaysText(value) {
+  return Number(value.toFixed(6)).toString();
+}
+function updateWorkCalculator() {
+  const rows = [...$('workCalculationRows').children].map(row => ({ name: row.querySelector('[data-work-name]').value, quantity: row.querySelector('[data-work-quantity]').value, daily: row.querySelector('[data-work-daily]').value }));
+  const result = calculateWorkDays(rows);
+  result.details.forEach((detail, index) => {
+    $('workCalculationRows').children[index].querySelector('output').textContent = detail.days === null ? '待填写' : `${workDaysText(detail.days)} 天`;
+  });
+  $('workCalculationTotal').textContent = result.valid ? workDaysText(result.total) : '待填写完整';
+  $('copyWorkCalculation').disabled = !result.valid;
+  $('workCalculationStatus').textContent = '';
+  $('workCalculationText').value = result.details.filter(row => row.days !== null).map(row => `${row.name}：${row.quantity} ÷ ${row.daily} = ${workDaysText(row.days)}天`).concat(result.valid ? [`合计：${workDaysText(result.total)}天`] : []).join('\n');
+}
+function addWorkCalculatorRow() {
+  const row = document.createElement('div');
+  row.className = 'calculator-row';
+  row.innerHTML = `<label>项目<input data-work-name list="workProjectOptions" placeholder="项目名称"></label><label>数量<input data-work-quantity type="number" min="0" step="any" placeholder="如122"></label><label>每日工作量（数量/天）<input data-work-daily type="number" min="0.000001" step="any" placeholder="如10"></label><div class="calculator-result">所需天数<output>待填写</output></div><button type="button" title="删除项目" aria-label="删除项目">×</button>`;
+  row.addEventListener('input', updateWorkCalculator);
+  row.querySelector('button').onclick = () => { row.remove(); updateWorkCalculator(); };
+  $('workCalculationRows').append(row);
+  updateWorkCalculator();
+}
+function initWorkCalculator() {
+  if (!$('workCalculationRows').children.length) addWorkCalculatorRow();
+  $('workProjectOptions').replaceChildren(...Object.keys(data.rules || {}).map(name => { const option = document.createElement('option'); option.value = name; return option; }));
+  $('addWorkCalculation').onclick = addWorkCalculatorRow;
+  $('copyWorkCalculation').onclick = async () => {
+    try {
+      await navigator.clipboard.writeText($('workCalculationText').value);
+      $('workCalculationStatus').textContent = '已复制换算明细';
+    } catch {
+      $('workCalculationText').focus(); $('workCalculationText').select();
+      $('workCalculationStatus').textContent = '剪贴板权限不可用，已选中明细，可手动复制。';
+    }
+  };
+}
 function setView(view) {
   const previousView = activeView;
   if (previousView === "entry" && view !== "entry") flushEntryDraftToRecords();
@@ -6153,7 +6200,8 @@ function setView(view) {
   document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === view));
   document.querySelectorAll(".view").forEach((section) => section.classList.remove("active"));
   $(`${view}View`).classList.add("active");
-  if (view === "mixed") renderMixedOverviewTable();
+  if (view === "tools") initWorkCalculator();
+  else if (view === "mixed") renderMixedOverviewTable();
   else renderOverview();
 }
 function showDialog(title, message, field) {

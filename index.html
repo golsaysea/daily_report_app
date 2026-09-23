@@ -33,6 +33,7 @@
         <button class="tab" data-view="mixed">混合表格</button>
         <button class="tab" data-view="sheet">自由表格</button>
         <button class="tab" data-view="specialties">专业汇总</button>
+        <button class="tab" data-view="tools">工具</button>
         <button class="tab" data-view="admin">管理员</button>
       </nav>
       <div class="actions">
@@ -568,6 +569,16 @@
               </div>
             </div>
             <div class="backup-list" id="backupList"></div>
+          </section>
+        </section>
+        <section class="view" id="toolsView">
+          <section class="panel work-calculator">
+            <div class="calculator-heading"><h2>工作量换算</h2><button id="copyWorkCalculation" type="button">复制换算明细</button></div>
+            <datalist id="workProjectOptions"></datalist>
+            <div id="workCalculationRows"></div>
+            <div class="calculator-footer"><button id="addWorkCalculation" type="button">添加项目</button><strong>合计 <output id="workCalculationTotal">0</output> 天</strong></div>
+            <p id="workCalculationStatus" role="status"></p>
+            <textarea id="workCalculationText" aria-label="工作量换算明细" readonly rows="8"></textarea>
           </section>
         </section>
       </main>
